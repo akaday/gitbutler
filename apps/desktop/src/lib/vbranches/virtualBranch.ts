@@ -1,10 +1,25 @@
-import { VirtualBranch, DetailedCommit, Commit, VirtualBranches, commitCompare } from './types';
+import { PatchSeries, VirtualBranch, VirtualBranches } from './types';
 import { invoke, listen } from '$lib/backend/ipc';
-import { RemoteBranchService } from '$lib/stores/remoteBranches';
 import { plainToInstance } from 'class-transformer';
 import { writable } from 'svelte/store';
 import type { BranchListingService } from '$lib/branches/branchListing';
 import type { ProjectMetrics } from '$lib/metrics/projectMetrics';
+
+export function allPreviousSeriesHavePrNumber(
+	seriesName: string,
+	validSeries: PatchSeries[]
+): boolean {
+	const unarchivedSeries = validSeries.filter((series) => !series.archived);
+	for (let i = unarchivedSeries.length - 1; i >= 0; i--) {
+		const series = unarchivedSeries[i]!;
+		if (series.name === seriesName) return true;
+		if (series.prNumber === null) return false;
+	}
+
+	// Will only happen if the series name is invalid
+	// or if the series failed to be fetched.
+	return false;
+}
 
 export class VirtualBranchService {
 	private loading = writable(false);
@@ -22,7 +37,6 @@ export class VirtualBranchService {
 	constructor(
 		private projectId: string,
 		private projectMetrics: ProjectMetrics,
-		private remoteBranchService: RemoteBranchService,
 		private branchListingService: BranchListingService
 	) {}
 
@@ -30,6 +44,7 @@ export class VirtualBranchService {
 		this.loading.set(true);
 		try {
 			this.handlePayload(await this.listVirtualBranches());
+			this.branchListingService.refresh();
 		} catch (err: any) {
 			console.error(err);
 			this.error.set(err);
@@ -39,50 +54,34 @@ export class VirtualBranchService {
 	}
 
 	private async handlePayload(branches: VirtualBranch[]) {
-		await Promise.all(
-			branches.map(async (b) => {
-				const upstreamName = b.upstream?.name;
-				if (upstreamName) {
-					try {
-						const data = await this.remoteBranchService.getRemoteBranchData(upstreamName);
-						const upstreamCommits = data.commits;
-						const stackedCommits = b.series.flatMap((series) => series.patches);
-
-						upstreamCommits.forEach((uc) => {
-							const match = b.commits.find((c) => commitCompare(uc, c));
-							const stackedMatch = stackedCommits.find((c) => commitCompare(uc, c));
-							if (match) {
-								match.relatedTo = uc;
-								uc.relatedTo = match;
-							}
-							if (stackedMatch) {
-								// This asymmetric difference is not ideal, but gets the job done while
-								// we are experimenting with stacking.
-								stackedMatch.relatedTo = uc;
-							}
-						});
-						linkAsParentChildren(upstreamCommits);
-						linkAsParentChildren(stackedCommits);
-						b.upstreamData = data;
-					} catch (e: any) {
-						console.log(e);
-					}
-				}
-				b.files.sort((a) => (a.conflicted ? -1 : 0));
-				// This is always true now
-				b.isMergeable = Promise.resolve(true);
-				const commits = b.commits;
-				linkAsParentChildren(commits);
-				return b;
-			})
-		);
-
+		this.linkRelatedCommits(branches);
 		this.branches.set(branches);
-
 		this.branchesError.set(undefined);
 		this.logMetrics(branches);
+	}
 
-		this.branchListingService.refresh();
+	/**
+	 * For the purpose of showing correct commits in correct colors we often
+	 * neeed to know if a commit corresponds to something upstream, such
+	 * that we can tell e.g. if a commit has been rebased.
+	 */
+	private async linkRelatedCommits(branches: VirtualBranch[]) {
+		branches.forEach(async (branch) => {
+			const upstreamName = branch.upstream?.name;
+			if (upstreamName) {
+				const upstreamCommits = branch.validSeries.flatMap((series) => series.upstreamPatches);
+				const commits = branch.validSeries.flatMap((series) => series.patches);
+				commits.forEach((commit) => {
+					const upstreamMatch = upstreamCommits.find(
+						(upstreamCommit) => commit.remoteCommitId === upstreamCommit.id
+					);
+					if (upstreamMatch) {
+						upstreamMatch.relatedTo = commit;
+						commit.relatedTo = upstreamMatch;
+					}
+				});
+			}
+		});
 	}
 
 	private async listVirtualBranches(): Promise<VirtualBranch[]> {
@@ -107,24 +106,12 @@ export class VirtualBranchService {
 			this.projectMetrics.setMetric('locked_hunk_count', lockedHunks.length);
 			this.projectMetrics.setMetric('file_count', files.length);
 			this.projectMetrics.setMetric('virtual_branch_count', branches.length);
+			this.projectMetrics.setMetric(
+				'max_stack_count',
+				Math.max(...branches.map((b) => b.series.length))
+			);
 		} catch (err: unknown) {
 			console.error(err);
-		}
-	}
-}
-
-function linkAsParentChildren(commits: DetailedCommit[] | Commit[]) {
-	for (let j = 0; j < commits.length; j++) {
-		const commit = commits[j];
-		if (commit && j === 0) {
-			commit.next = undefined;
-		} else if (commit) {
-			const child = commits[j - 1];
-			if (child instanceof DetailedCommit) commit.next = child;
-			if (child instanceof Commit) commit.next = child;
-		}
-		if (commit && j !== commits.length - 1) {
-			commit.prev = commits[j + 1];
 		}
 	}
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import AvatarGroup from '$lib/avatar/AvatarGroup.svelte';
 	import SidebarEntry from '$lib/SidebarEntry.svelte';
+	import AvatarGroup from '$lib/avatar/AvatarGroup.svelte';
 
 	interface Props {
 		selected?: boolean;
@@ -12,6 +12,7 @@
 		branchDetails?: { commitCount: number; linesAdded: number; linesRemoved: number };
 		remotes?: string[];
 		local?: boolean;
+		series: string[];
 	}
 
 	const { ...args }: Props = $props();

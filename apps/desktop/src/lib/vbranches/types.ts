@@ -1,9 +1,24 @@
 import 'reflect-metadata';
+import { emptyConflictEntryPresence, type ConflictEntryPresence } from '$lib/conflictEntryPresence';
 import { splitMessage } from '$lib/utils/commitMessage';
-import { hashCode } from '$lib/utils/string';
-import { isDefined, notNull } from '@gitbutler/ui/utils/typeguards';
-import { Type, Transform } from 'class-transformer';
-import type { PullRequest } from '$lib/gitHost/interface/types';
+import { hashCode } from '@gitbutler/ui/utils/string';
+import { isDefined } from '@gitbutler/ui/utils/typeguards';
+import { Type, Transform, plainToInstance } from 'class-transformer';
+import type { PullRequest } from '$lib/forge/interface/types';
+
+function transformResultToType(type: any, value: any) {
+	if (!Array.isArray(value)) return plainToInstance(type, value);
+
+	return value.map((item) => {
+		if ('Ok' in item) {
+			return plainToInstance(type, item.Ok);
+		}
+		if ('Err' in item) {
+			return new Error(item.Err.description);
+		}
+		return plainToInstance(type, item);
+	});
+}
 
 export type ChangeType =
 	/// Entry does not exist in old version
@@ -79,14 +94,7 @@ export class LocalFile {
 	}
 
 	get lockedIds(): HunkLock[] {
-		return this.hunks
-			.flatMap((hunk) => hunk.lockedTo)
-			.filter(notNull)
-			.filter(isDefined);
-	}
-
-	get looksConflicted(): boolean {
-		return fileLooksConflicted(this);
+		return this.hunks.flatMap((hunk) => hunk.lockedTo).filter(isDefined);
 	}
 }
 
@@ -105,6 +113,10 @@ export class VirtualBranches {
 	skippedFiles!: SkippedFile[];
 }
 
+export function isPatchSeries(item: PatchSeries | Error): item is PatchSeries {
+	return item instanceof PatchSeries;
+}
+
 export class VirtualBranch {
 	id!: string;
 	name!: string;
@@ -117,8 +129,8 @@ export class VirtualBranch {
 	description!: string;
 	head!: string;
 	order!: number;
-	@Type(() => Branch)
-	upstream?: Branch;
+	@Type(() => BranchData)
+	upstream?: BranchData;
 	upstreamData?: BranchData;
 	upstreamName?: string;
 	conflicted!: boolean;
@@ -144,8 +156,12 @@ export class VirtualBranch {
 	tree!: string;
 
 	// Used in the stacking context where VirtualBranch === Stack
-	@Type(() => PatchSeries)
-	series!: PatchSeries[];
+	@Transform(({ value }) => transformResultToType(PatchSeries, value))
+	series!: (PatchSeries | Error)[];
+
+	get validSeries(): PatchSeries[] {
+		return this.series.filter(isPatchSeries);
+	}
 
 	get localCommits() {
 		return this.commits.filter((c) => c.status === 'local');
@@ -164,11 +180,40 @@ export class VirtualBranch {
 
 		return this.upstreamName || this.name;
 	}
+
+	get ancestorMostConflictedCommit(): DetailedCommit | undefined {
+		if (this.commits.length === 0) return undefined;
+		for (let i = this.commits.length - 1; i >= 0; i--) {
+			const commit = this.commits[i];
+			if (commit?.conflicted) return commit;
+		}
+	}
 }
 
 // Used for dependency injection
 export const BRANCH = Symbol('branch');
 export type CommitStatus = 'local' | 'localAndRemote' | 'integrated' | 'remote';
+
+export class ConflictEntries {
+	public entries: Map<string, ConflictEntryPresence> = new Map();
+	constructor(ancestorEntries: string[], ourEntries: string[], theirEntries: string[]) {
+		ancestorEntries.forEach((entry) => {
+			const entryPresence = this.entries.get(entry) || emptyConflictEntryPresence();
+			entryPresence.ancestor = true;
+			this.entries.set(entry, entryPresence);
+		});
+		ourEntries.forEach((entry) => {
+			const entryPresence = this.entries.get(entry) || emptyConflictEntryPresence();
+			entryPresence.ours = true;
+			this.entries.set(entry, entryPresence);
+		});
+		theirEntries.forEach((entry) => {
+			const entryPresence = this.entries.get(entry) || emptyConflictEntryPresence();
+			entryPresence.theirs = true;
+			this.entries.set(entry, entryPresence);
+		});
+	}
+}
 
 export class DetailedCommit {
 	id!: string;
@@ -177,28 +222,57 @@ export class DetailedCommit {
 	@Transform((obj) => new Date(obj.value))
 	createdAt!: Date;
 	isRemote!: boolean;
+	isLocalAndRemote!: boolean;
 	isIntegrated!: boolean;
-	@Type(() => LocalFile)
-	files!: LocalFile[];
 	parentIds!: string[];
 	branchId!: string;
 	changeId!: string;
 	isSigned!: boolean;
-	relatedTo?: Commit;
+	relatedTo?: DetailedCommit;
 	conflicted!: boolean;
 	// Set if a GitButler branch reference pointing to this commit exists. In the format of "refs/remotes/origin/my-branch"
 	remoteRef?: string | undefined;
-	// Identifies the remote commit id from which this local commit was copied. The backend figured this out by comparing
-	// author, commit and message.
-	copiedFromRemoteId?: string;
+
+	/**
+	 *
+	 * Represents the remote commit id of this patch.
+	 * This field is set if:
+	 *   - The commit has been pushed
+	 *   - The commit has been copied from a remote commit (when applying a remote branch)
+	 *
+	 * The `remoteCommitId` may be the same as the `id` or it may be different if the commit has been rebased or updated.
+	 *
+	 * Note: This makes both the `isRemote` and `copiedFromRemoteId` fields redundant, but they are kept for compatibility.
+	 */
+	remoteCommitId?: string;
 
 	prev?: DetailedCommit;
 	next?: DetailedCommit;
 
+	@Transform(
+		(obj) =>
+			new ConflictEntries(obj.value.ancestorEntries, obj.value.ourEntries, obj.value.theirEntries)
+	)
+	conflictedFiles!: ConflictEntries;
+
+	// Dependency tracking
+	/**
+	 * The commit ids of the dependencies of this commit.
+	 */
+	dependencies!: string[];
+	/**
+	 * The ids of the commits that depend on this commit.
+	 */
+	reverseDependencies!: string[];
+	/**
+	 * The hunk hashes of uncommitted changes that depend on this commit.
+	 */
+	dependentDiffs!: string[];
+
 	get status(): CommitStatus {
 		if (this.isIntegrated) return 'integrated';
-		if (this.isRemote && (!this.relatedTo || this.id === this.relatedTo.id))
-			return 'localAndRemote';
+		if (this.isLocalAndRemote) return 'localAndRemote';
+		if (this.isRemote) return 'remote';
 		return 'local';
 	}
 
@@ -249,22 +323,20 @@ export class Commit {
 	isMergeCommit() {
 		return this.parentIds.length > 1;
 	}
+
+	get conflictedFiles() {
+		return new ConflictEntries([], [], []);
+	}
 }
 
 export type AnyCommit = DetailedCommit | Commit;
-
-export function commitCompare(left: AnyCommit, right: DetailedCommit): boolean {
-	if (left.id === right.id) return true;
-	if (left.changeId && right.changeId && left.changeId === right.changeId) return true;
-	if (right.copiedFromRemoteId && right.copiedFromRemoteId === left.id) return true;
-	return false;
-}
 
 export class RemoteHunk {
 	diff!: string;
 	hash?: string;
 	new_start!: number;
 	new_lines!: number;
+	changeType!: ChangeType;
 
 	get id(): string {
 		return hashCode(this.diff);
@@ -280,6 +352,7 @@ export class RemoteFile {
 	@Type(() => RemoteHunk)
 	hunks!: RemoteHunk[];
 	binary!: boolean;
+	large!: boolean;
 
 	get id(): string {
 		return this.path;
@@ -291,10 +364,6 @@ export class RemoteFile {
 
 	get justpath() {
 		return this.path.split('/').slice(0, -1).join('/');
-	}
-
-	get large() {
-		return false;
 	}
 
 	get conflicted() {
@@ -312,22 +381,6 @@ export class RemoteFile {
 	get locked(): boolean {
 		return false;
 	}
-
-	get looksConflicted(): boolean {
-		return fileLooksConflicted(this);
-	}
-}
-
-function fileLooksConflicted(file: AnyFile) {
-	const hasStartingMarker = file.hunks.some((hunk) =>
-		hunk.diff.split('\n').some((line) => line.startsWith('>>>>>>> theirs', 1))
-	);
-
-	const hasEndingMarker = file.hunks.some((hunk) =>
-		hunk.diff.split('\n').some((line) => line.startsWith('<<<<<<< ours', 1))
-	);
-
-	return hasStartingMarker && hasEndingMarker;
 }
 
 export interface Author {
@@ -335,20 +388,6 @@ export interface Author {
 	name?: string;
 	gravatarUrl?: string;
 	isBot?: boolean;
-}
-
-export class Branch {
-	sha!: string;
-	name!: string;
-	upstream?: string;
-	lastCommitTimestampMs?: number | undefined;
-	lastCommitAuthor?: string | undefined;
-	givenName!: string;
-	isRemote!: boolean;
-
-	get displayName(): string {
-		return this.name.replace('refs/remotes/', '').replace('refs/heads/', '');
-	}
 }
 
 export class BranchData {
@@ -360,6 +399,8 @@ export class BranchData {
 	commits!: Commit[];
 	isMergeable!: boolean | undefined;
 	forkPoint?: string | undefined;
+	isRemote!: boolean;
+	givenName!: string;
 
 	get ahead(): number {
 		return this.commits.length;
@@ -401,6 +442,17 @@ export class PatchSeries {
 	@Type(() => DetailedCommit)
 	upstreamPatches!: DetailedCommit[];
 
+	/**
+	 * A list of identifiers for the review unit at possible forges (eg. Pull Request).
+	 * The list is empty if there is no review units, eg. no Pull Request has been created.
+	 */
+	prNumber?: number | null;
+	/**
+	 * Archived represents the state when series/branch has been integrated and is below the merge base of the branch.
+	 * This would occur when the branch has been merged at the remote and the workspace has been updated with that change.
+	 */
+	archived!: boolean;
+
 	get localCommits() {
 		return this.patches.filter((c) => c.status === 'local');
 	}
@@ -416,4 +468,34 @@ export class PatchSeries {
 	get branchName() {
 		return this.name?.replace('refs/remotes/origin/', '');
 	}
+
+	get conflicted() {
+		return this.patches.some((c) => c.conflicted);
+	}
+}
+
+/**
+ * @desc Represents a GitHub Pull Request identifier.
+ * @property prNumber - The GitHub Pull Request identifier.
+ */
+export interface GitHubIdentifier {
+	prNumber: number;
+}
+
+/**
+ * @desc Represents the order of series (branches) and changes (commits) in a stack.
+ * @property series - The series are ordered from newest to oldest (most recent stacks go first).
+ */
+export class StackOrder {
+	series!: SeriesOrder[];
+}
+
+/**
+ * @desc Represents the order of changes (commits) in a series (branch).
+ * @property name - Unique name of the series (branch). Must already exist in the stack.
+ * @property commitIds - This is the desired commit order for the series. Because the commits will be rabased, naturally, the the commit ids will be different afte updating. The changes are ordered from newest to oldest (most recent changes go first)
+ */
+export class SeriesOrder {
+	name!: string;
+	commitIds!: string[];
 }

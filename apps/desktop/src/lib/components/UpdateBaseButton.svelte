@@ -1,15 +1,10 @@
 <script lang="ts">
 	import IntegrateUpstreamModal from './IntegrateUpstreamModal.svelte';
-	import { Project } from '$lib/backend/projects';
 	import { BaseBranchService } from '$lib/baseBranch/baseBranchService';
-	import { showInfo } from '$lib/notifications/toasts';
-	import { getContext } from '$lib/utils/context';
-	import { BranchController } from '$lib/vbranches/branchController';
+	import { getContext } from '@gitbutler/shared/context';
 	import Button from '@gitbutler/ui/Button.svelte';
 
 	const baseBranchService = getContext(BaseBranchService);
-	const branchController = getContext(BranchController);
-	const project = getContext(Project);
 
 	const base = baseBranchService.base;
 
@@ -19,17 +14,10 @@
 		return hasUpstreamCommits && !diverged;
 	});
 
-	let modal = $state<IntegrateUpstreamModal>();
+	let modal = $state<ReturnType<typeof IntegrateUpstreamModal>>();
 
 	function openModal() {
 		modal?.show();
-	}
-
-	async function updateBaseBranch() {
-		let infoText = await branchController.updateBaseBranch();
-		if (infoText) {
-			showInfo('Stashed conflicting branches', infoText);
-		}
 	}
 </script>
 
@@ -42,11 +30,7 @@
 		kind="solid"
 		tooltip="Merge upstream into common base"
 		onclick={() => {
-			if (project.succeedingRebases) {
-				openModal();
-			} else {
-				updateBaseBranch();
-			}
+			openModal();
 		}}
 		loading={modal?.imports.open}
 	>

@@ -6,10 +6,14 @@
 	import HunkContextMenu from '$lib/hunk/HunkContextMenu.svelte';
 	import { SETTINGS, type Settings } from '$lib/settings/userSettings';
 	import LargeDiffMessage from '$lib/shared/LargeDiffMessage.svelte';
-	import { getContext, getContextStoreBySymbol, maybeGetContextStore } from '$lib/utils/context';
 	import { type HunkSection } from '$lib/utils/fileSections';
 	import { SelectedOwnership } from '$lib/vbranches/ownership';
 	import { VirtualBranch, type Hunk } from '$lib/vbranches/types';
+	import {
+		getContext,
+		getContextStoreBySymbol,
+		maybeGetContextStore
+	} from '@gitbutler/shared/context';
 	import type { Writable } from 'svelte/store';
 
 	interface Props {
@@ -59,7 +63,7 @@
 
 <HunkContextMenu
 	bind:this={contextMenu}
-	target={viewport}
+	trigger={viewport}
 	projectPath={project.vscodePath}
 	{filePath}
 	{readonly}
@@ -92,6 +96,7 @@
 				{selectable}
 				{draggingDisabled}
 				tabSize={$userSettings.tabSize}
+				wrapText={$userSettings.wrapText}
 				diffFont={$userSettings.diffFont}
 				diffLigatures={$userSettings.diffLigatures}
 				inlineUnifiedDiffs={$userSettings.inlineUnifiedDiffs}
@@ -101,11 +106,12 @@
 				}}
 				subsections={section.subSections}
 				handleSelected={(hunk, isSelected) => onHunkSelected(hunk, isSelected)}
-				handleLineContextMenu={({ event, lineNumber, hunk, subsection }) => {
+				handleLineContextMenu={({ event, beforeLineNumber, afterLineNumber, hunk, subsection }) => {
 					contextMenu?.open(event, {
 						hunk,
 						section: subsection,
-						lineNumber: lineNumber
+						beforeLineNumber,
+						afterLineNumber
 					});
 				}}
 			/>

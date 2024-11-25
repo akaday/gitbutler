@@ -1,5 +1,5 @@
+import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { listen as listenTauri } from '@tauri-apps/api/event';
-import { invoke as invokeTauri } from '@tauri-apps/api/tauri';
 import type { EventCallback, EventName } from '@tauri-apps/api/event';
 
 export enum Code {
@@ -75,4 +75,14 @@ export async function invoke<T>(command: string, params: Record<string, unknown>
 export function listen<T>(event: EventName, handle: EventCallback<T>) {
 	const unlisten = listenTauri(event, handle);
 	return async () => await unlisten.then((unlistenFn) => unlistenFn());
+}
+
+export class CommandService {
+	async invoke<T>(command: string, params: Record<string, unknown> = {}): Promise<T> {
+		return await invoke<T>(command, params);
+	}
+
+	listen<T>(event: EventName, handle: EventCallback<T>): () => Promise<void> {
+		return listen<T>(event, handle);
+	}
 }

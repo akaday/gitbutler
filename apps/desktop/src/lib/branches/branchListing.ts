@@ -1,20 +1,20 @@
 // Class transformers will bust a gut if this isn't imported first
 import 'reflect-metadata';
 
-import { invoke } from '$lib/backend/ipc';
+import { Code, invoke } from '$lib/backend/ipc';
 import {
 	getEntryName,
 	getEntryUpdatedDate,
 	getEntryWorkspaceStatus,
 	type SidebarEntrySubject
 } from '$lib/navigation/types';
-import { persisted, type Persisted } from '$lib/persisted/persisted';
 import { debouncedDerive } from '$lib/utils/debounce';
+import { persisted, type Persisted } from '@gitbutler/shared/persisted';
 import { Transform, Type, plainToInstance } from 'class-transformer';
 import Fuse from 'fuse.js';
 import { derived, readable, writable, type Readable, type Writable } from 'svelte/store';
-import type { GitHostListingService } from '$lib/gitHost/interface/gitHostListingService';
-import type { PullRequest } from '$lib/gitHost/interface/types';
+import type { ForgeListingService } from '$lib/forge/interface/forgeListingService';
+import type { PullRequest } from '$lib/forge/interface/types';
 
 export class BranchListingService {
 	private branchListingsWritable = writable<BranchListing[]>([]);
@@ -30,11 +30,21 @@ export class BranchListingService {
 	async refresh() {
 		const listedValues = (await this.list({})) || [];
 		this.branchListingsWritable.set(listedValues);
+
+		const displayedBranchListingDetails = Array.from(this.branchListingDetails.keys());
+		this.updateBranchListingDetails(displayedBranchListingDetails);
 	}
 
 	private async list(filter: BranchListingFilter | undefined = undefined) {
-		const entries = await invoke<any[]>('list_branches', { projectId: this.projectId, filter });
-		return plainToInstance(BranchListing, entries);
+		try {
+			const entries = await invoke<any[]>('list_branches', { projectId: this.projectId, filter });
+			return plainToInstance(BranchListing, entries);
+		} catch (error: any) {
+			if (error.code === Code.DefaultTargetNotFound) {
+				// Swallow this error since user should be taken to project setup page
+				return undefined;
+			}
+		}
 	}
 
 	private branchListingDetails = new Map<string, Writable<BranchListingDetails | undefined>>();
@@ -56,37 +66,58 @@ export class BranchListingService {
 		return store;
 	}
 
-	private accumulatedBranchListings: string[] = [];
+	/**
+	 * Refresh the information for a particular branch.
+	 *
+	 * Will only fetch the information if the branch is already being tracked.
+	 */
+	refreshBranchListingDetails(branchName: string) {
+		if (!this.branchListingDetails.has(branchName)) {
+			return;
+		}
+		this.updateBranchListing(branchName);
+	}
+
+	private branchFetchQueue: string[] = [];
 	private updateBranchListingTimeout: ReturnType<typeof setTimeout> | undefined;
-	// Accumulates multiple update calls
+	// Debounces multiple update calls
 	private async updateBranchListing(branchName: string) {
-		this.accumulatedBranchListings.push(branchName);
+		this.branchFetchQueue.push(branchName);
 
 		clearTimeout(this.updateBranchListingTimeout);
 		this.updateBranchListingTimeout = setTimeout(
 			(() => {
-				this.updateBranchListingDetails(this.accumulatedBranchListings);
-				this.accumulatedBranchListings = [];
+				this.updateBranchListingDetails(this.branchFetchQueue);
+				this.branchFetchQueue = [];
 			}).bind(this),
 			50
 		);
 	}
 
 	private async updateBranchListingDetails(branchNames: string[]) {
-		const plainDetails = await invoke<unknown[]>('get_branch_listing_details', {
-			projectId: this.projectId,
-			branchNames
-		});
+		try {
+			const plainDetails = await invoke<unknown[]>('get_branch_listing_details', {
+				projectId: this.projectId,
+				branchNames
+			});
 
-		const branchListingDetails = plainToInstance(BranchListingDetails, plainDetails);
+			const branchListingDetails = plainToInstance(BranchListingDetails, plainDetails);
 
-		branchListingDetails.forEach((branchListingDetails) => {
-			let store = this.branchListingDetails.get(branchListingDetails.name);
+			branchListingDetails.forEach((branchListingDetails) => {
+				let store = this.branchListingDetails.get(branchListingDetails.name);
 
-			store ??= writable();
+				store ??= writable();
 
-			store.set(branchListingDetails);
-		});
+				store.set(branchListingDetails);
+			});
+		} catch (error: any) {
+			if (error.code === Code.DefaultTargetNotFound) {
+				// Swallow this error since user should be taken to project setup page
+				return;
+			}
+
+			throw error;
+		}
 	}
 }
 
@@ -100,24 +131,30 @@ export class CombinedBranchListingService {
 	private pullRequests: Readable<PullRequest[]>;
 	selectedOption: Persisted<'all' | 'pullRequest' | 'local'>;
 
+	// Used when deriving the search results and for finding the total number
+	// of listings
 	combinedSidebarEntries: Readable<SidebarEntrySubject[]>;
+	// Contains entries grouped by date for the unsearched sidebar entries
 	groupedSidebarEntries: Readable<GroupedSidebarEntries>;
+	// Whether or not to show the pull request tab in the sidebar
 	pullRequestsListed: Readable<boolean>;
 
 	constructor(
 		branchListingService: BranchListingService,
-		gitHostListingService: Readable<GitHostListingService | undefined>,
+		forgeListingService: Readable<ForgeListingService | undefined>,
 		projectId: string
 	) {
 		this.selectedOption = persisted<'all' | 'pullRequest' | 'local'>(
 			'all',
 			`branches-selectedOption-${projectId}`
 		);
-		this.pullRequests = readable([] as PullRequest[], (set) => {
-			const unsubscribeListingService = gitHostListingService.subscribe((gitHostListingService) => {
-				if (!gitHostListingService) return;
 
-				const unsubscribePullRequests = gitHostListingService.prs.subscribe((prs) => {
+		// Get a readable store of pull requeests
+		this.pullRequests = readable([] as PullRequest[], (set) => {
+			const unsubscribeListingService = forgeListingService.subscribe((forgeListingService) => {
+				if (!forgeListingService) return;
+
+				const unsubscribePullRequests = forgeListingService.prs.subscribe((prs) => {
 					set(prs);
 				});
 
@@ -127,31 +164,33 @@ export class CombinedBranchListingService {
 			return unsubscribeListingService;
 		});
 
+		// Whether or not to show the pull request tab in the sidebar
 		this.pullRequestsListed = derived(
-			gitHostListingService,
-			(gitHostListingService) => {
-				return !!gitHostListingService;
+			forgeListingService,
+			(forgeListingService) => {
+				return !!forgeListingService;
 			},
 			false
 		);
 
-		const branchListingsByName = derived(branchListingService.branchListings, (branchListings) => {
-			const set = new Set<string>(branchListings.map((branchListing) => branchListing.name));
-			return set;
-		});
-
+		// Derive the combined sidebar entries
 		this.combinedSidebarEntries = debouncedDerive(
-			[
-				branchListingsByName,
-				this.pullRequests,
-				branchListingService.branchListings,
-				this.selectedOption
-			],
-			([branchListingsByName, pullRequests, branchListings, selectedOption]) => {
+			[this.pullRequests, branchListingService.branchListings, this.selectedOption],
+			([pullRequests, branchListings, selectedOption]) => {
+				// Find the pull requests that don't have cooresponding local branches,
+				// remote branches, virutal branches, or stack branch heads.
+				// Then map the pull requests into the SidebarEntrySubject type
 				const pullRequestSubjects: SidebarEntrySubject[] = pullRequests
-					.filter((pullRequests) => !branchListingsByName.has(pullRequests.sourceBranch))
+					.filter(
+						(pullRequests) =>
+							!branchListings.some((branchListing) =>
+								branchListing.containsPullRequestBranch(pullRequests.sourceBranch)
+							)
+					)
 					.map((pullRequests) => ({ type: 'pullRequest', subject: pullRequests }));
 
+				// Map the raw branch listing classes into the
+				// SidebarEntrySubject type
 				const branchListingSubjects: SidebarEntrySubject[] = branchListings.map(
 					(branchListing) => ({
 						type: 'branchListing',
@@ -159,6 +198,7 @@ export class CombinedBranchListingService {
 					})
 				);
 
+				// Sort the combined entries by when htey were last updated
 				const output = [...pullRequestSubjects, ...branchListingSubjects];
 
 				output.sort((a, b) => {
@@ -171,6 +211,7 @@ export class CombinedBranchListingService {
 					return getEntryName(a).localeCompare(getEntryName(b));
 				});
 
+				// Filter by the currently selected tab in the frontend
 				const filtered = this.filterSidebarEntries(pullRequests, selectedOption, output);
 
 				return filtered;
@@ -179,6 +220,7 @@ export class CombinedBranchListingService {
 			50
 		);
 
+		// Create the entries which are grouped date-wise
 		this.groupedSidebarEntries = derived(this.combinedSidebarEntries, (combinedSidebarEntries) => {
 			const groupings = this.groupBranches(combinedSidebarEntries);
 			return groupings;
@@ -192,13 +234,29 @@ export class CombinedBranchListingService {
 				if (!searchTerm) return [];
 
 				const fuse = new Fuse(combinedSidebarEntries, {
-					keys: ['subject.name', 'subject.title']
+					keys: [
+						// Subject is branch listing
+						'subject.name',
+						'subject.lastCommiter.email',
+						'subject.lastCommiter.name',
+						// Subject is pull request
+						'subject.title',
+						'subject.author.email',
+						'subject.author.name'
+					],
+					threshold: 0.3, // 0 is the strictest.
+					sortFn: (a, b) => {
+						// Sort results by when the item was last modified.
+						const dateA = (a.item.modifiedAt || a.item.updatedAt) as Date | undefined;
+						const dateB = (b.item.modifiedAt || b.item.updatedAt) as Date | undefined;
+						if (dateA && dateB) {
+							return dateA < dateB ? -1 : 1;
+						}
+						return 0;
+					}
 				});
 
-				return fuse
-					.search(searchTerm)
-					.slice(0, 100)
-					.map((searchResult) => searchResult.item);
+				return fuse.search(searchTerm, { limit: 100 }).map((result) => result.item);
 			},
 			[] as SidebarEntrySubject[]
 		);
@@ -249,8 +307,8 @@ export class CombinedBranchListingService {
 				return sidebarEntries.filter(
 					(sidebarEntry) =>
 						sidebarEntry.type === 'pullRequest' ||
-						pullRequests.some(
-							(pullRequest) => pullRequest.sourceBranch === sidebarEntry.subject.name
+						pullRequests.some((pullRequest) =>
+							sidebarEntry.subject.containsPullRequestBranch(pullRequest.sourceBranch)
 						)
 				);
 			}
@@ -311,6 +369,13 @@ export class BranchListing {
 	lastCommiter!: Author;
 	/** Whether or not there is a local branch as part of the grouping */
 	hasLocal!: boolean;
+
+	containsPullRequestBranch(sourceBranch: string): boolean {
+		if (sourceBranch === this.name) return true;
+		if (this.virtualBranch?.stackBranches.includes(sourceBranch)) return true;
+
+		return false;
+	}
 }
 
 /** Represents a reference to an associated virtual branch */
@@ -321,6 +386,13 @@ export class VirtualBranchReference {
 	id!: string;
 	/** Determines if the virtual branch is applied in the workspace */
 	inWorkspace!: boolean;
+	/**
+   List of branch names that are part of the stack
+   Ordered from newest to oldest (the most recent branch is first in the list)
+    */
+	stackBranches!: string[];
+	/** Pull Request numbes by branch name associated with the stack */
+	pullRequests!: Map<string, number>;
 }
 
 /** Represents a "commit author" or "signature", based on the data from ther git history */
@@ -329,6 +401,8 @@ export class Author {
 	name?: string | undefined;
 	/** The email of the author as configured in the git config */
 	email?: string | undefined;
+	/** The gravatar id of the author */
+	gravatarUrl?: string | undefined;
 }
 
 /** Represents a fat struct with all the data associated with a branch */

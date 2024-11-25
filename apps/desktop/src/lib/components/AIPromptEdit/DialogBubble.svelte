@@ -1,50 +1,44 @@
 <script lang="ts">
 	import { MessageRole } from '$lib/ai/types';
 	import Markdown from '$lib/components/Markdown.svelte';
-	import { autoHeight } from '$lib/utils/autoHeight';
 	import Button from '@gitbutler/ui/Button.svelte';
 	import Icon from '@gitbutler/ui/Icon.svelte';
-	import { createEventDispatcher } from 'svelte';
+	import Textarea from '@gitbutler/ui/Textarea.svelte';
 
-	export let disableRemove = false;
-	export let isError = false;
-	export let isLast = false;
-	export let autofocus = false;
-	export let editing = false;
-	export let promptMessage: { role: MessageRole; content: string };
-
-	const dispatcher = createEventDispatcher<{
-		removeLastExample: void;
-		addExample: void;
-		input: string;
-	}>();
-	let textareaElement: HTMLTextAreaElement | undefined;
-
-	function focusTextareaOnMount(
-		textareaElement: HTMLTextAreaElement | undefined,
-		autofocus: boolean,
-		editing: boolean
-	) {
-		if (textareaElement && autofocus && editing) {
-			textareaElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-			textareaElement.focus();
-		}
+	interface Props {
+		role: MessageRole;
+		disableRemove?: boolean;
+		isError?: boolean;
+		isLast?: boolean;
+		editing?: boolean;
+		promptMessage: string;
+		onRemoveLastExample: () => void;
+		onAddExample: () => void;
+		onInput: (value: string) => void;
 	}
 
-	$: focusTextareaOnMount(textareaElement, autofocus, editing);
-
-	$: if (textareaElement) autoHeight(textareaElement);
+	let {
+		role,
+		disableRemove = false,
+		isError = false,
+		isLast = false,
+		editing = false,
+		promptMessage = $bindable(),
+		onRemoveLastExample,
+		onAddExample,
+		onInput
+	}: Props = $props();
 </script>
 
 <div
 	class="bubble-wrap"
 	class:editing
-	class:bubble-wrap_user={promptMessage.role === MessageRole.User}
-	class:bubble-wrap_assistant={promptMessage.role === MessageRole.Assistant}
+	class:bubble-wrap_user={role === MessageRole.User}
+	class:bubble-wrap_assistant={role === MessageRole.Assistant}
 >
 	<div class="bubble">
 		<div class="bubble__header text-13 text-bold">
-			{#if promptMessage.role === MessageRole.User}
+			{#if role === MessageRole.User}
 				<Icon name="profile" />
 				<span>User</span>
 			{:else}
@@ -54,24 +48,19 @@
 		</div>
 
 		{#if editing}
-			<textarea
-				bind:this={textareaElement}
-				bind:value={promptMessage.content}
-				class="textarea scrollbar text-13 text-body"
-				class:is-error={isError}
-				rows={1}
-				on:input={(e) => {
-					autoHeight(e.currentTarget);
-
-					dispatcher('input', e.currentTarget.value);
-				}}
-				on:change={(e) => {
-					autoHeight(e.currentTarget);
-				}}
-			></textarea>
+			<div class="textarea" class:is-error={isError}>
+				<Textarea
+					unstyled
+					bind:value={promptMessage}
+					oninput={(e: Event) => {
+						const target = e.currentTarget as HTMLTextAreaElement;
+						onInput(target.value);
+					}}
+				></Textarea>
+			</div>
 		{:else}
 			<div class="bubble-message scrollbar text-13 text-body">
-				<Markdown content={promptMessage.content} />
+				<Markdown content={promptMessage} />
 			</div>
 		{/if}
 	</div>
@@ -79,18 +68,11 @@
 	{#if isLast && editing}
 		<div class="bubble-actions">
 			{#if !disableRemove}
-				<Button
-					icon="bin-small"
-					kind="soft"
-					style="error"
-					onclick={() => dispatcher('removeLastExample')}
-				>
+				<Button icon="bin-small" kind="soft" style="error" onclick={() => onRemoveLastExample()}>
 					Remove example
 				</Button>
 			{/if}
-			<Button style="ghost" outline grow onclick={() => dispatcher('addExample')}>
-				Add new example
-			</Button>
+			<Button style="ghost" outline grow onclick={() => onAddExample()}>Add new example</Button>
 		</div>
 	{/if}
 </div>
@@ -166,11 +148,6 @@
 
 	.textarea {
 		width: 100%;
-		resize: none;
-		background: none;
-		border: none;
-		outline: none;
-		padding: 12px;
 		background-color: var(--clr-bg-1);
 		border: 1px solid var(--clr-border-2);
 		border-radius: 0 0 var(--radius-l) var(--radius-l);

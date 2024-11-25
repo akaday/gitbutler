@@ -1,5 +1,6 @@
 <script lang="ts">
 	import SupportersBanner from './SupportersBanner.svelte';
+	import { platformName } from '$lib/platform/platform';
 	import { openExternalUrl } from '$lib/utils/url';
 	import Button from '@gitbutler/ui/Button.svelte';
 	import Icon from '@gitbutler/ui/Icon.svelte';
@@ -22,29 +23,35 @@
 	}
 </script>
 
-<aside class="profile-sidebar" data-tauri-drag-region>
+<aside class="profile-sidebar">
 	<section class="profile-sidebar__top">
 		<div class="profile-sidebar__menu-wrapper">
-			<div class="profile-sidebar__header">
-				<div class="back-btn__icon">
-					<Button
-						icon="chevron-left"
-						style="ghost"
-						onmousedown={() => {
-							if (history.length > 0) {
-								history.back();
-							} else {
-								goto('/');
-							}
-						}}
-					/>
+			<div class="profile-sidebar__header-wrapper">
+				{#if platformName === 'macos'}
+					<div class="traffic-light-placeholder"></div>
+				{/if}
+				<div class="profile-sidebar__header">
+					<div class="back-btn__icon">
+						<Button
+							icon="chevron-left"
+							style="ghost"
+							onmousedown={() => {
+								if (history.length > 0) {
+									history.back();
+								} else {
+									goto('/');
+								}
+							}}
+						/>
+					</div>
+					<h2 class="profile-sidebar__title text-18 text-bold">Preferences</h2>
 				</div>
-				<h2 class="profile-sidebar__title text-18 text-bold">Preferences</h2>
 			</div>
 
 			<ul class="profile-sidebar__menu">
 				<li>
 					<button
+						type="button"
 						class="profile-sidebar__menu-item"
 						class:item_selected={currentSection === 'profile'}
 						on:mousedown={() => onMenuClick('profile')}
@@ -55,6 +62,7 @@
 				</li>
 				<li>
 					<button
+						type="button"
 						class="profile-sidebar__menu-item"
 						class:item_selected={currentSection === 'appearance'}
 						on:mousedown={() => onMenuClick('appearance')}
@@ -65,6 +73,7 @@
 				</li>
 				<li>
 					<button
+						type="button"
 						class="profile-sidebar__menu-item"
 						class:item_selected={currentSection === 'git'}
 						on:mousedown={() => onMenuClick('git')}
@@ -76,6 +85,7 @@
 
 				<li>
 					<button
+						type="button"
 						class="profile-sidebar__menu-item"
 						class:item_selected={currentSection === 'integrations'}
 						on:mousedown={() => onMenuClick('integrations')}
@@ -86,6 +96,7 @@
 				</li>
 				<li>
 					<button
+						type="button"
 						class="profile-sidebar__menu-item"
 						class:item_selected={currentSection === 'ai'}
 						on:mousedown={() => onMenuClick('ai')}
@@ -96,6 +107,7 @@
 				</li>
 				<li>
 					<button
+						type="button"
 						class="profile-sidebar__menu-item"
 						class:item_selected={currentSection === 'telemetry'}
 						on:mousedown={() => onMenuClick('telemetry')}
@@ -106,6 +118,7 @@
 				</li>
 				<li>
 					<button
+						type="button"
 						class="profile-sidebar__menu-item"
 						class:item_selected={currentSection === 'experimental'}
 						on:mousedown={() => onMenuClick('experimental')}
@@ -121,6 +134,7 @@
 	<section class="profile-sidebar__bottom">
 		<div class="social-banners">
 			<button
+				type="button"
 				class="social-banner"
 				on:click={async () =>
 					await openExternalUrl('mailto:hello@gitbutler.com?subject=Feedback or question!')}
@@ -129,6 +143,7 @@
 				<Icon name="mail" />
 			</button>
 			<button
+				type="button"
 				class="social-banner"
 				on:click={async () => await openExternalUrl('https://discord.gg/MmFkmaJ42D')}
 			>
@@ -147,17 +162,27 @@
 		display: flex;
 		flex-direction: column;
 		justify-content: space-between;
-		padding: 40px 14px 14px 14px;
+		padding: 14px;
 		border-right: 1px solid var(--clr-border-2);
 		background-color: var(--clr-bg-1);
 		height: 100%;
 		width: 256px;
 	}
 
+	.profile-sidebar__header-wrapper {
+		display: flex;
+		flex-direction: column;
+	}
+
 	.profile-sidebar__header {
 		display: flex;
 		align-items: center;
 		gap: 8px;
+	}
+
+	.traffic-light-placeholder {
+		width: 100%;
+		height: 24px;
 	}
 
 	/* TOP */

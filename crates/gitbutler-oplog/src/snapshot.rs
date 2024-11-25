@@ -1,9 +1,10 @@
 use std::vec;
 
 use anyhow::Result;
-use gitbutler_branch::{Branch, BranchUpdateRequest};
+use gitbutler_branch::BranchUpdateRequest;
 use gitbutler_project::{access::WorktreeWritePermission, Project};
 use gitbutler_reference::ReferenceName;
+use gitbutler_stack::Stack;
 
 use super::entry::Trailer;
 use crate::{
@@ -49,9 +50,24 @@ pub trait SnapshotExt {
     fn snapshot_branch_update(
         &self,
         snapshot_tree: git2::Oid,
-        old_branch: &Branch,
+        old_stack: &Stack,
         update: &BranchUpdateRequest,
         error: Option<&anyhow::Error>,
+        perm: &mut WorktreeWritePermission,
+    ) -> anyhow::Result<()>;
+    fn snapshot_create_dependent_branch(
+        &self,
+        branch_name: &str,
+        perm: &mut WorktreeWritePermission,
+    ) -> anyhow::Result<()>;
+    fn snapshot_remove_dependent_branch(
+        &self,
+        branch_name: &str,
+        perm: &mut WorktreeWritePermission,
+    ) -> anyhow::Result<()>;
+    fn snapshot_update_dependent_branch_name(
+        &self,
+        new_branch_name: &str,
         perm: &mut WorktreeWritePermission,
     ) -> anyhow::Result<()>;
 }
@@ -140,7 +156,7 @@ impl SnapshotExt for Project {
     fn snapshot_branch_update(
         &self,
         snapshot_tree: git2::Oid,
-        old_branch: &Branch,
+        old_stack: &Stack,
         update: &BranchUpdateRequest,
         error: Option<&anyhow::Error>,
         perm: &mut WorktreeWritePermission,
@@ -150,7 +166,7 @@ impl SnapshotExt for Project {
                 [
                     vec![Trailer {
                         key: "name".to_string(),
-                        value: old_branch.name.to_string(),
+                        value: old_stack.name.to_string(),
                     }],
                     error_trailer(error),
                 ]
@@ -162,7 +178,7 @@ impl SnapshotExt for Project {
                     vec![
                         Trailer {
                             key: "before".to_string(),
-                            value: old_branch.name.clone(),
+                            value: old_stack.name.clone(),
                         },
                         Trailer {
                             key: "after".to_string(),
@@ -181,7 +197,7 @@ impl SnapshotExt for Project {
                     vec![
                         Trailer {
                             key: "before".to_string(),
-                            value: old_branch.order.to_string(),
+                            value: old_stack.order.to_string(),
                         },
                         Trailer {
                             key: "after".to_string(),
@@ -198,14 +214,14 @@ impl SnapshotExt for Project {
                     vec![
                         Trailer {
                             key: "before".to_string(),
-                            value: old_branch
+                            value: old_stack
                                 .selected_for_changes
                                 .unwrap_or_default()
                                 .to_string(),
                         },
                         Trailer {
                             key: "after".to_string(),
-                            value: old_branch.name.clone(),
+                            value: old_stack.name.clone(),
                         },
                     ],
                     error_trailer(error),
@@ -218,7 +234,7 @@ impl SnapshotExt for Project {
                     vec![
                         Trailer {
                             key: "before".to_string(),
-                            value: old_branch
+                            value: old_stack
                                 .upstream
                                 .as_ref()
                                 .map(|r| r.to_string())
@@ -237,6 +253,51 @@ impl SnapshotExt for Project {
             SnapshotDetails::new(OperationKind::GenericBranchUpdate)
         };
         self.commit_snapshot(snapshot_tree, details, perm)?;
+        Ok(())
+    }
+    fn snapshot_create_dependent_branch(
+        &self,
+        branch_name: &str,
+        perm: &mut WorktreeWritePermission,
+    ) -> anyhow::Result<()> {
+        let details =
+            SnapshotDetails::new(OperationKind::CreateDependentBranch).with_trailers(vec![
+                Trailer {
+                    key: "name".to_string(),
+                    value: branch_name.to_string(),
+                },
+            ]);
+        self.create_snapshot(details, perm)?;
+        Ok(())
+    }
+    fn snapshot_remove_dependent_branch(
+        &self,
+        branch_name: &str,
+        perm: &mut WorktreeWritePermission,
+    ) -> anyhow::Result<()> {
+        let details =
+            SnapshotDetails::new(OperationKind::RemoveDependentBranch).with_trailers(vec![
+                Trailer {
+                    key: "name".to_string(),
+                    value: branch_name.to_string(),
+                },
+            ]);
+        self.create_snapshot(details, perm)?;
+        Ok(())
+    }
+    fn snapshot_update_dependent_branch_name(
+        &self,
+        new_branch_name: &str,
+        perm: &mut WorktreeWritePermission,
+    ) -> anyhow::Result<()> {
+        let details =
+            SnapshotDetails::new(OperationKind::UpdateDependentBranchName).with_trailers(vec![
+                Trailer {
+                    key: "name".to_string(),
+                    value: new_branch_name.to_string(),
+                },
+            ]);
+        self.create_snapshot(details, perm)?;
         Ok(())
     }
 }

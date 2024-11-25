@@ -1,5 +1,6 @@
 <script lang="ts">
 	import FileStatusBadge from './FileStatusBadge.svelte';
+	import Badge from '$lib/Badge.svelte';
 	import Checkbox from '$lib/Checkbox.svelte';
 	import Icon from '$lib/Icon.svelte';
 	import Tooltip from '$lib/Tooltip.svelte';
@@ -20,15 +21,16 @@
 		checked?: boolean;
 		indeterminate?: boolean;
 		conflicted?: boolean;
+		conflictHint?: string;
 		locked?: boolean;
 		lockText?: string;
-		stacking?: boolean;
 		oncheck?: (
 			e: Event & {
 				currentTarget: EventTarget & HTMLInputElement;
 			}
 		) => void;
 		onclick?: (e: MouseEvent) => void;
+		onresolveclick?: (e: MouseEvent) => void;
 		onkeydown?: (e: KeyboardEvent) => void;
 		ondragstart?: (e: DragEvent) => void;
 		oncontextmenu?: (e: MouseEvent) => void;
@@ -47,17 +49,18 @@
 		checked = $bindable(),
 		indeterminate,
 		conflicted,
+		conflictHint,
 		locked,
 		lockText,
-		stacking = false,
 		oncheck,
 		onclick,
+		onresolveclick,
 		onkeydown,
 		ondragstart,
 		oncontextmenu
 	}: Props = $props();
 
-	const fileInfo = splitFilePath(filePath);
+	const fileInfo = $derived(splitFilePath(filePath));
 </script>
 
 <div
@@ -68,7 +71,6 @@
 	class:selected-draggable={selected}
 	class:clickable
 	class:draggable
-	class:stacking
 	aria-selected={selected}
 	role="option"
 	tabindex="-1"
@@ -77,6 +79,7 @@
 	oncontextmenu={(e) => {
 		if (oncontextmenu) {
 			e.preventDefault();
+			e.stopPropagation();
 			oncontextmenu(e);
 		}
 	}}
@@ -91,12 +94,17 @@
 	{/if}
 	<div class="info">
 		<FileIcon fileName={fileInfo.filename} />
-		<span class="text-12 name">
+		<span class="text-12 text-semibold name truncate">
 			{fileInfo.filename}
 		</span>
-		<span class="text-12 path">
-			{fileInfo.path}
-		</span>
+
+		<div class="path-container">
+			<Tooltip text={filePath} delay={1200}>
+				<span class="text-12 path truncate">
+					{fileInfo.path}
+				</span>
+			</Tooltip>
+		</div>
 	</div>
 
 	<div class="details">
@@ -108,10 +116,32 @@
 			</Tooltip>
 		{/if}
 
+		{#if onresolveclick}
+			{#if !conflicted}
+				<Tooltip text="Conflict resolved">
+					<Badge style="success" label="Resolved" />
+				</Tooltip>
+			{:else}
+				<button
+					type="button"
+					class="mark-resolved-btn"
+					onclick={(e) => {
+						e.stopPropagation();
+						onresolveclick?.(e);
+					}}
+				>
+					<span class="text-11 text-semibold">Mark as resolved</span>
+					<Icon name="tick-small" opacity={0.5} />
+				</button>
+			{/if}
+		{/if}
+
 		{#if conflicted}
-			<div class="conflicted">
-				<Icon name="warning-small" color="error" />
-			</div>
+			<Tooltip text={conflictHint}>
+				<div class="conflicted">
+					<Icon name="warning-small" color="error" />
+				</div>
+			</Tooltip>
 		{/if}
 
 		{#if fileStatus}
@@ -138,19 +168,14 @@
 		text-align: left;
 		user-select: none;
 		outline: none;
-		background: var(--clr-bg-1);
-		border-bottom: 1px solid var(--clr-border-3);
+		background: transparent;
+		border-bottom: none;
 
 		&:last-child {
 			border-bottom: none;
 		}
 
-		&.stacking {
-			background: transparent;
-			border-bottom: none;
-		}
-
-		&:not(:last-child).stacking {
+		&:not(:last-child) {
 			border-bottom: 1px solid var(--clr-border-3);
 		}
 	}
@@ -184,8 +209,26 @@
 			opacity var(--transition-fast);
 	}
 
+	.mark-resolved-btn {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		padding: 3px 6px 3px 6px;
+		border: 1px solid var(--clr-border-2);
+		border-radius: var(--radius-m);
+		margin: 0 2px;
+		white-space: nowrap;
+		transition:
+			background-color var(--transition-fast),
+			border-color var(--transition-fast);
+
+		&:hover {
+			background-color: var(--clr-bg-1);
+		}
+	}
+
+	/* INFO */
 	.info {
-		pointer-events: none;
 		display: flex;
 		align-items: center;
 		flex-grow: 1;
@@ -195,28 +238,41 @@
 	}
 
 	.name {
-		color: var(--clr-scale-ntrl-0);
-		white-space: nowrap;
+		flex-shrink: 1;
+		flex-grow: 0;
+		min-width: 40px;
+		pointer-events: none;
+		color: var(--clt-text-1);
+	}
+
+	.path-container {
+		display: flex;
+		justify-content: flex-end;
 		flex-shrink: 0;
-		text-overflow: ellipsis;
+		flex-grow: 1;
+		flex-basis: 0px;
+		min-width: 50px;
+		direction: rtl;
+		text-align: left;
 		overflow: hidden;
 	}
 
 	.path {
-		color: var(--clr-scale-ntrl-0);
+		display: inline-block;
+		color: var(--clt-text-1);
 		line-height: 120%;
-		flex-shrink: 1;
-		white-space: nowrap;
-		text-overflow: ellipsis;
-		overflow: hidden;
 		opacity: 0.3;
+		transition: opacity var(--transition-fast);
+		direction: rtl;
+		max-width: 100%;
+		text-align: left;
 	}
 
 	/* DETAILS */
 	.details {
 		display: flex;
 		align-items: center;
-		gap: 4px;
+		gap: 6px;
 	}
 
 	.details .locked {

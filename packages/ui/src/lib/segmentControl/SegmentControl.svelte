@@ -30,7 +30,9 @@
 		setSelected: ({ index: segmentIndex, id }) => {
 			if (segmentIndex >= 0 && segmentIndex < segments.length) {
 				$selectedSegmentIndex = segmentIndex;
-				onselect && onselect(id);
+				if (onselect) {
+					onselect(id);
+				}
 			}
 		}
 	};
@@ -38,16 +40,6 @@
 	setContext<SegmentContext>('SegmentControl', context);
 </script>
 
-<div class="wrapper" class:full-width={fullWidth}>
+<div class="segment-control-container" class:full-width={fullWidth}>
 	{@render children()}
 </div>
-
-<style lang="postcss">
-	.wrapper {
-		display: inline-flex;
-	}
-
-	.wrapper.full-width {
-		width: 100%;
-	}
-</style>

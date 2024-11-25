@@ -1,7 +1,6 @@
-import { AuthService } from '$lib/auth/authService';
 import { setSentryUser } from '$lib/analytics/sentry';
-import { writable } from 'svelte/store';
-import { env } from '$env/dynamic/public';
+import { writable, type Writable } from 'svelte/store';
+import type { HttpClient } from '@gitbutler/shared/httpClient';
 
 export interface User {
 	id: string;
@@ -13,7 +12,7 @@ export interface User {
 }
 
 export class UserService {
-	user = writable<User | undefined>(undefined, (set) => {
+	user: Writable<User | undefined> = writable<User | undefined>(undefined, (set) => {
 		this.fetchUser()
 			.then((data) => {
 				this.error.set(undefined);
@@ -26,26 +25,13 @@ export class UserService {
 
 	readonly error = writable();
 
-	constructor(readonly authService: AuthService) {}
+	constructor(private readonly httpClient: HttpClient) {}
 
 	private async fetchUser() {
-		const authToken = this.authService.getToken();
-		if (authToken) {
-			const userResponse = await fetch(env.PUBLIC_APP_HOST + 'api/user', {
-				method: 'GET',
-				headers: {
-					'X-AUTH-TOKEN': authToken
-				}
-			});
-			if (!userResponse.ok) {
-				throw new Error('Failed to fetch user');
-			}
+		const user = await this.httpClient.get<User>('/user');
+		setSentryUser(user);
 
-			const userBody = await userResponse.json();
-			setSentryUser(userBody);
-
-			return userBody;
-		}
+		return user;
 	}
 
 	clearUser() {

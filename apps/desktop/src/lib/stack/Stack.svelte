@@ -1,38 +1,28 @@
 <script lang="ts">
-	import StackHeader from './StackHeader.svelte';
-	import StackSeries from './StackSeries.svelte';
-	import EmptyStatePlaceholder from '../components/EmptyStatePlaceholder.svelte';
-	import InfoMessage from '../shared/InfoMessage.svelte';
-	import { PromptService } from '$lib/ai/promptService';
-	import { AIService } from '$lib/ai/service';
+	import SeriesList from './SeriesList.svelte';
+	import UncommittedChanges from './UncommittedChanges.svelte';
+	import StackHeader from './header/StackHeader.svelte';
 	import laneNewSvg from '$lib/assets/empty-state/lane-new.svg?raw';
 	import noChangesSvg from '$lib/assets/empty-state/lane-no-changes.svg?raw';
 	import { Project } from '$lib/backend/projects';
 	import Dropzones from '$lib/branch/Dropzones.svelte';
-	import StackingNewStackCard from '$lib/branch/StackingNewStackCard.svelte';
-	import CommitDialog from '$lib/commit/CommitDialog.svelte';
-	import { projectAiGenEnabled } from '$lib/config/config';
-	import BranchFiles from '$lib/file/BranchFiles.svelte';
-	import { getGitHostChecksMonitor } from '$lib/gitHost/interface/gitHostChecksMonitor';
-	import { getGitHostListingService } from '$lib/gitHost/interface/gitHostListingService';
-	import { getGitHostPrMonitor } from '$lib/gitHost/interface/gitHostPrMonitor';
-	import { showError } from '$lib/notifications/toasts';
-	import { persisted } from '$lib/persisted/persisted';
-	import { isFailure } from '$lib/result';
+	import { getForgeListingService } from '$lib/forge/interface/forgeListingService';
 	import ScrollableContainer from '$lib/scroll/ScrollableContainer.svelte';
 	import { SETTINGS, type Settings } from '$lib/settings/userSettings';
 	import Resizer from '$lib/shared/Resizer.svelte';
-	import Spacer from '$lib/shared/Spacer.svelte';
-	import { User } from '$lib/stores/user';
-	import { getContext, getContextStore, getContextStoreBySymbol } from '$lib/utils/context';
+	import CollapsedLane from '$lib/stack/CollapsedLane.svelte';
+	import { intersectionObserver } from '$lib/utils/intersectionObserver';
 	import { BranchController } from '$lib/vbranches/branchController';
-	import { getLocalAndRemoteCommits, getLocalCommits } from '$lib/vbranches/contexts';
 	import { FileIdSelection } from '$lib/vbranches/fileIdSelection';
-	import { VirtualBranch } from '$lib/vbranches/types';
+	import { DetailedCommit, VirtualBranch } from '$lib/vbranches/types';
+	import { getContext, getContextStore, getContextStoreBySymbol } from '@gitbutler/shared/context';
+	import { persisted } from '@gitbutler/shared/persisted';
 	import Button from '@gitbutler/ui/Button.svelte';
+	import EmptyStatePlaceholder from '@gitbutler/ui/EmptyStatePlaceholder.svelte';
+	import Spacer from '@gitbutler/ui/Spacer.svelte';
 	import lscache from 'lscache';
 	import { onMount } from 'svelte';
-	import type { Writable } from 'svelte/store';
+	import { type Writable } from 'svelte/store';
 
 	const {
 		isLaneCollapsed,
@@ -43,23 +33,18 @@
 	const fileIdSelection = getContext(FileIdSelection);
 	const branchStore = getContextStore(VirtualBranch);
 	const project = getContext(Project);
-	const user = getContextStore(User);
-
 	const branch = $derived($branchStore);
-
-	const aiGenEnabled = projectAiGenEnabled(project.id);
-
-	const aiService = getContext(AIService);
-	const promptService = getContext(PromptService);
 
 	const userSettings = getContextStoreBySymbol<Settings>(SETTINGS);
 	const defaultBranchWidthRem = persisted<number>(24, 'defaulBranchWidth' + project.id);
 	const laneWidthKey = 'laneWidth_';
+	let lastPush = $state<Date | undefined>();
 
 	let laneWidth: number | undefined = $state();
 
-	let commitDialog = $state<CommitDialog>();
 	let rsViewport = $state<HTMLElement>();
+	const branchHasFiles = $derived(branch.files !== undefined && branch.files.length > 0);
+	const branchHasNoCommits = $derived(branch.commits !== undefined && branch.commits.length === 0);
 
 	$effect(() => {
 		if ($commitBoxOpen && branch.files.length === 0) {
@@ -67,72 +52,55 @@
 		}
 	});
 
-	async function generateBranchName() {
-		if (!aiGenEnabled) return;
-
-		const hunks = branch.files.flatMap((f) => f.hunks);
-
-		const prompt = promptService.selectedBranchPrompt(project.id);
-		const messageResult = await aiService.summarizeBranch({
-			hunks,
-			userToken: $user?.access_token,
-			branchTemplate: prompt
-		});
-
-		if (isFailure(messageResult)) {
-			console.error(messageResult.failure);
-			showError('Failed to generate branch name', messageResult.failure);
-
-			return;
-		}
-
-		const message = messageResult.value;
-
-		if (message && message !== branch.name) {
-			branch.name = message;
-			branchController.updateBranchName(branch.id, branch.name);
-		}
-	}
-
 	onMount(() => {
 		laneWidth = lscache.get(laneWidthKey + branch.id);
 	});
 
-	const localCommits = getLocalCommits();
-	const localAndRemoteCommits = getLocalAndRemoteCommits();
-
+	let scrollEndVisible = $state(true);
 	let isPushingCommits = $state(false);
-	const localCommitsConflicted = $derived($localCommits.some((commit) => commit.conflicted));
-	const localAndRemoteCommitsConflicted = $derived(
-		$localAndRemoteCommits.some((commit) => commit.conflicted)
-	);
 
-	const listingService = getGitHostListingService();
-	const prMonitor = getGitHostPrMonitor();
-	const checksMonitor = getGitHostChecksMonitor();
+	const { upstreamPatches, branchPatches, hasConflicts } = $derived.by(() => {
+		let hasConflicts = false;
+		const upstreamPatches: DetailedCommit[] = [];
+		const branchPatches: DetailedCommit[] = [];
+
+		branch.validSeries.map((series) => {
+			upstreamPatches.push(...series.upstreamPatches);
+			branchPatches.push(...series.patches);
+			hasConflicts = branchPatches.some((patch) => patch.conflicted);
+		});
+
+		return {
+			upstreamPatches,
+			branchPatches,
+			hasConflicts
+		};
+	});
+
+	let canPush = $derived.by(() => {
+		if (upstreamPatches.length > 0) return true;
+		if (branchPatches.some((p) => !['localAndRemote', 'integrated'].includes(p.status)))
+			return true;
+		return false;
+	});
+
+	const listingService = getForgeListingService();
 
 	async function push() {
 		isPushingCommits = true;
 		try {
-			await branchController.pushBranch(branch.id, branch.requiresForce, true);
+			await branchController.pushBranch(branch.id, branch.requiresForce);
 			$listingService?.refresh();
-			$prMonitor?.refresh();
-			$checksMonitor?.update();
+			lastPush = new Date();
 		} finally {
 			isPushingCommits = false;
 		}
 	}
-
-	let scrollEndVisible = $state(false);
 </script>
 
 {#if $isLaneCollapsed}
 	<div class="collapsed-lane-container">
-		<StackHeader
-			uncommittedChanges={branch.files.length}
-			onGenerateBranchName={generateBranchName}
-			{isLaneCollapsed}
-		/>
+		<CollapsedLane uncommittedChanges={branch.files.length} {isLaneCollapsed} />
 		<div class="collapsed-lane-divider" data-remove-from-draggable></div>
 	</div>
 {:else}
@@ -144,94 +112,89 @@
 					top: 12,
 					bottom: 12
 				}}
-				bind:scrollEndVisible
 			>
 				<div
 					bind:this={rsViewport}
 					style:width={`${laneWidth || $defaultBranchWidthRem}rem`}
 					class="branch-card__contents"
-					data-tauri-drag-region
 				>
-					<StackHeader {isLaneCollapsed} onGenerateBranchName={generateBranchName} />
+					<StackHeader
+						{branch}
+						onCollapseButtonClick={() => {
+							$isLaneCollapsed = true;
+						}}
+					/>
 					<div class="card-stacking">
-						{#if branch.files?.length > 0}
-							<div class="branch-card__files card">
-								<Dropzones>
-									<BranchFiles
-										isUnapplied={false}
-										files={branch.files}
-										showCheckboxes={$commitBoxOpen}
-										allowMultiple
-										commitDialogExpanded={commitBoxOpen}
-										focusCommitDialog={() => commitDialog?.focus()}
-									/>
-									{#if branch.conflicted}
-										<div class="card-notifications">
-											<InfoMessage filled outlined={false} style="error">
-												<svelte:fragment slot="title">
-													{#if branch.files.some((f) => f.conflicted)}
-														This virtual branch conflicts with upstream changes. Please resolve all
-														conflicts and commit before you can continue.
-													{:else}
-														Please commit your resolved conflicts to continue.
-													{/if}
-												</svelte:fragment>
-											</InfoMessage>
-										</div>
-									{/if}
-								</Dropzones>
-
-								<CommitDialog
-									bind:this={commitDialog}
-									projectId={project.id}
-									expanded={commitBoxOpen}
-									hasSectionsAfter={branch.commits.length > 0}
-								/>
-							</div>
-						{:else if branch.commits.length === 0}
-							<Dropzones>
-								<div class="new-branch card">
-									<EmptyStatePlaceholder image={laneNewSvg} width="11rem">
-										<svelte:fragment slot="title">This is a new branch</svelte:fragment>
-										<svelte:fragment slot="caption">
-											You can drag and drop files or parts of files here.
-										</svelte:fragment>
+						{#if branchHasFiles}
+							<UncommittedChanges {commitBoxOpen} />
+						{:else if branchHasNoCommits}
+							<Dropzones type="file">
+								<div class="new-branch">
+									<EmptyStatePlaceholder image={laneNewSvg} width={180} bottomMargin={48}>
+										{#snippet title()}
+											This is a new lane
+										{/snippet}
+										{#snippet caption()}
+											You can drag and drop files<br />or parts of files here.
+										{/snippet}
 									</EmptyStatePlaceholder>
 								</div>
 							</Dropzones>
 						{:else}
-							<Dropzones>
-								<div class="no-changes card">
-									<EmptyStatePlaceholder image={noChangesSvg} width="11rem" hasBottomMargin={false}>
-										<svelte:fragment slot="caption">
-											No uncommitted changes on this branch
-										</svelte:fragment>
+							<Dropzones type="file">
+								<div class="no-changes">
+									<EmptyStatePlaceholder image={noChangesSvg} width={180}>
+										{#snippet caption()}
+											No uncommitted<br />changes on this lane
+										{/snippet}
 									</EmptyStatePlaceholder>
 								</div>
 							</Dropzones>
 						{/if}
 						<Spacer dotted />
 						<div class="lane-branches">
-							<StackingNewStackCard />
-							<StackSeries {branch} />
+							<SeriesList {branch} {lastPush} />
 						</div>
 					</div>
 				</div>
-				<div class="lane-branches__action" class:scroll-end-visible={scrollEndVisible}>
-					<Button
-						style="pop"
-						kind="solid"
-						wide
-						loading={isPushingCommits}
-						disabled={localCommitsConflicted || localAndRemoteCommitsConflicted}
-						tooltip={localCommitsConflicted
-							? 'In order to push, please resolve any conflicted commits.'
-							: undefined}
-						onclick={push}
+				{#if canPush}
+					<div
+						class="lane-branches__action"
+						class:scroll-end-visible={scrollEndVisible}
+						use:intersectionObserver={{
+							callback: (entry) => {
+								if (entry?.isIntersecting) {
+									scrollEndVisible = false;
+								} else {
+									scrollEndVisible = true;
+								}
+							},
+							options: {
+								root: null,
+								rootMargin: `-100% 0px 0px 0px`,
+								threshold: 0
+							}
+						}}
 					>
-						{branch.requiresForce ? 'Force push' : 'Push'}
-					</Button>
-				</div>
+						<Button
+							style="neutral"
+							kind="solid"
+							wide
+							loading={isPushingCommits}
+							disabled={hasConflicts}
+							tooltip={hasConflicts
+								? 'In order to push, please resolve any conflicted commits.'
+								: undefined}
+							onclick={push}
+						>
+							{branch.requiresForce
+								? 'Force push'
+								: branch.validSeries.length > 1
+									? 'Push All'
+									: 'Push'}
+						</Button>
+					</div>
+				{/if}
 			</ScrollableContainer>
 			<div class="divider-line">
 				{#if rsViewport}
@@ -271,21 +234,36 @@
 	.lane-branches {
 		display: flex;
 		flex-direction: column;
-		gap: 12px;
 	}
 
 	.lane-branches__action {
+		position: relative;
 		z-index: var(--z-lifted);
 		position: sticky;
-		padding: 14px;
-		bottom: 0px;
-		transition:
-			background-color 0.3s ease,
-			box-shadow 0.3s ease;
+		padding: 0 12px 12px;
+		margin-bottom: 1px;
+		bottom: 0;
+		transition: background-color var(--transition-fast);
 
-		&:not(.scroll-end-visible) {
+		&:after {
+			content: '';
+			display: block;
+			position: absolute;
+			bottom: 0;
+			left: 0;
+			height: calc(100% + 12px);
+			width: 100%;
+			z-index: -1;
 			background-color: var(--clr-bg-1);
 			border-top: 1px solid var(--clr-border-2);
+
+			transform: translateY(0);
+			opacity: 0;
+			transition: opacity var(--transition-fast);
+		}
+
+		&:not(.scroll-end-visible):after {
+			opacity: 1;
 		}
 	}
 
@@ -312,23 +290,12 @@
 		flex-direction: column;
 	}
 
-	.branch-card__files.card,
-	.no-changes.card,
-	.new-branch.card {
+	.no-changes,
+	.new-branch {
 		border-radius: 0 0 var(--radius-m) var(--radius-m) !important;
-	}
-
-	.branch-card__files {
-		display: flex;
-		flex-direction: column;
-		flex: 1;
-		height: 100%;
-	}
-
-	.card-notifications {
-		display: flex;
-		flex-direction: column;
-		padding: 12px;
+		border: 1px solid var(--clr-border-2);
+		border-top-width: 0;
+		background: var(--clr-bg-1);
 	}
 
 	.new-branch,
@@ -342,6 +309,7 @@
 		color: var(--clr-scale-ntrl-60);
 		justify-content: center;
 		cursor: default; /* was defaulting to text cursor */
+		border-top-width: 0px;
 	}
 
 	/* COLLAPSED LANE */

@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { getNameNormalizationServiceContext } from '$lib/branches/nameNormalizationService';
-	import { getGitHost } from '$lib/gitHost/interface/gitHost';
-	import { getContextStore } from '$lib/utils/context';
+	import { getForge } from '$lib/forge/interface/forge';
 	import { openExternalUrl } from '$lib/utils/url';
 	import { VirtualBranch } from '$lib/vbranches/types';
+	import { getContextStore } from '@gitbutler/shared/context';
 	import Button from '@gitbutler/ui/Button.svelte';
 
 	const {
@@ -20,8 +20,8 @@
 
 	const branch = getContextStore(VirtualBranch);
 	const upstreamName = $derived($branch.upstreamName);
-	const gitHost = getGitHost();
-	const gitHostBranch = $derived(upstreamName ? $gitHost?.branch(upstreamName) : undefined);
+	const forge = getForge();
+	const forgeBranch = $derived(upstreamName ? $forge?.branch(upstreamName) : undefined);
 
 	const nameNormalizationService = getNameNormalizationServiceContext();
 
@@ -48,16 +48,16 @@
 			style="success"
 			kind="solid"
 			tooltip="Changes have been integrated upstream, update your workspace to make this lane disappear."
-			reversedDirection>Integrated</Button
+			>Integrated</Button
 		>
 	{:else}
 		<Button
 			clickable={false}
 			size="tag"
-			icon="virtual-branch-small"
+			icon="branch-small"
 			style="neutral"
-			tooltip="Changes are in your working directory"
-			reversedDirection>Virtual</Button
+			kind="soft"
+			tooltip="Changes are in your working directory">Virtual</Button
 		>
 	{/if}
 	{#if !isUnapplied && !isLaneCollapsed}
@@ -65,6 +65,7 @@
 			clickable={false}
 			size="tag"
 			style="neutral"
+			kind="soft"
 			shrinkable
 			disabled
 			tooltip={'Branch name that will be used when pushing.\nChange it from the lane menu'}
@@ -78,7 +79,7 @@
 		size="tag"
 		style="neutral"
 		kind="solid"
-		icon="remote-branch-small"
+		icon="branch-small"
 		tooltip="Some changes have been pushed"
 		reversedDirection>Remote</Button
 	>
@@ -89,7 +90,7 @@
 		outline
 		shrinkable
 		onclick={(e: MouseEvent) => {
-			const url = gitHostBranch?.url;
+			const url = forgeBranch?.url;
 			if (url) openExternalUrl(url);
 			e.preventDefault();
 			e.stopPropagation();

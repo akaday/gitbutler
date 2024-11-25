@@ -214,7 +214,7 @@ where
                 // get the full image path of the peer id; this is pretty expensive at the moment.
                 // TODO(qix-): see if dropping sysinfo for a more bespoke implementation is worth it.
                 let mut system = sysinfo::System::new();
-                system.refresh_processes(sysinfo::ProcessesToUpdate::All);
+                system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
 
                 // We can ignore clippy here since the type is different depending on the platform.
                 #[allow(clippy::useless_conversion)]
@@ -352,7 +352,7 @@ where
     Fut: std::future::Future<Output = Option<String>>,
     Extra: Send + Clone,
 {
-    let mut args = vec!["push", "--quiet"];
+    let mut args = vec!["push", "--quiet", "--no-verify"];
 
     let refspec = refspec.to_string();
 
@@ -360,7 +360,7 @@ where
     args.push(&refspec);
 
     if force {
-        args.push("--force");
+        args.push("--force-with-lease");
     }
 
     let (status, stdout, stderr) =

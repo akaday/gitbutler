@@ -5,32 +5,34 @@
 	import TargetCard from './TargetCard.svelte';
 	import WorkspaceButton from './WorkspaceButton.svelte';
 	import Resizer from '../shared/Resizer.svelte';
-	import { Project } from '$lib/backend/projects';
-	import { featureTopics } from '$lib/config/uiFeatureFlags';
+	import { ProjectService } from '$lib/backend/projects';
 	import { ModeService } from '$lib/modes/service';
+	import CloudSeriesButton from '$lib/navigation/CloudSeriesButton.svelte';
 	import EditButton from '$lib/navigation/EditButton.svelte';
-	import TopicsButton from '$lib/navigation/TopicsButton.svelte';
-	import { persisted } from '$lib/persisted/persisted';
+	import FeedButton from '$lib/navigation/FeedButton.svelte';
 	import { platformName } from '$lib/platform/platform';
 	import { SETTINGS, type Settings } from '$lib/settings/userSettings';
-	import { getContext, getContextStoreBySymbol } from '$lib/utils/context';
 	import { createKeybind } from '$lib/utils/hotkeys';
+	import { getContext, getContextStoreBySymbol } from '@gitbutler/shared/context';
+	import { persisted } from '@gitbutler/shared/persisted';
 	import { env } from '$env/dynamic/public';
 
 	const minResizerWidth = 280;
 	const minResizerRatio = 150;
 	const userSettings = getContextStoreBySymbol<Settings>(SETTINGS);
-	const project = getContext(Project);
+	const projectService = getContext(ProjectService);
+	const cloudEnabled = projectService.cloudEnabled;
+	const projectId = projectService.projectId;
 	const defaultTrayWidthRem = persisted<number | undefined>(
 		undefined,
-		'defaulTrayWidth_ ' + project.id
+		'defaulTrayWidth_ ' + projectId
 	);
 
 	let viewport: HTMLDivElement;
 	let isResizerHovered = false;
 	let isResizerDragging = false;
 
-	const isNavCollapsed = persisted<boolean>(false, 'projectNavCollapsed_' + project.id);
+	const isNavCollapsed = persisted<boolean>(false, 'projectNavCollapsed_' + projectId);
 
 	function toggleNavCollapse() {
 		$isNavCollapsed = !$isNavCollapsed;
@@ -44,8 +46,6 @@
 
 	const modeService = getContext(ModeService);
 	const mode = modeService.mode;
-
-	const topicsEnabled = featureTopics();
 </script>
 
 <svelte:window on:keydown={handleKeyDown} />
@@ -87,6 +87,7 @@
 		/>
 
 		<button
+			type="button"
 			class="folding-button"
 			class:resizer-hovered={isResizerHovered || isResizerDragging}
 			on:mousedown={toggleNavCollapse}
@@ -107,25 +108,25 @@
 		style:width={$defaultTrayWidthRem && !$isNavCollapsed ? $defaultTrayWidthRem + 'rem' : null}
 		bind:this={viewport}
 		role="menu"
-		tabindex="0"
 	>
 		<!-- condition prevents split second UI shift -->
-		{#if $platformName || env.PUBLIC_TESTING}
+		{#if platformName || env.PUBLIC_TESTING}
 			<div class="navigation-top">
-				{#if $platformName === 'darwin'}
-					<div class="drag-region" data-tauri-drag-region></div>
+				{#if platformName === 'macos'}
+					<div class="traffic-lights-placeholder" data-tauri-drag-region></div>
 				{/if}
 				<ProjectSelector isNavCollapsed={$isNavCollapsed} />
 				<div class="domains">
 					<TargetCard isNavCollapsed={$isNavCollapsed} />
 					{#if $mode?.type === 'OpenWorkspace'}
-						<WorkspaceButton href={`/${project.id}/board`} isNavCollapsed={$isNavCollapsed} />
+						<WorkspaceButton href={`/${projectId}/board`} isNavCollapsed={$isNavCollapsed} />
 					{:else if $mode?.type === 'Edit'}
-						<EditButton href={`/${project.id}/edit`} isNavCollapsed={$isNavCollapsed} />
+						<EditButton href={`/${projectId}/edit`} isNavCollapsed={$isNavCollapsed} />
 					{/if}
 
-					{#if $topicsEnabled}
-						<TopicsButton href={`/${project.id}/topics`} isNavCollapsed={$isNavCollapsed} />
+					{#if $cloudEnabled}
+						<CloudSeriesButton href={`/${projectId}/series`} isNavCollapsed={$isNavCollapsed} />
+						<FeedButton href={`/${projectId}/feed`} isNavCollapsed={$isNavCollapsed} />
 					{/if}
 				</div>
 			</div>
@@ -133,7 +134,7 @@
 			{#if !$isNavCollapsed}
 				<Branches />
 			{/if}
-			<Footer projectId={project.id} isNavCollapsed={$isNavCollapsed} />
+			<Footer {projectId} isNavCollapsed={$isNavCollapsed} />
 		{/if}
 	</div>
 </aside>
@@ -162,10 +163,6 @@
 		user-select: none;
 	}
 
-	.drag-region {
-		flex-shrink: 0;
-		height: 30px;
-	}
 	.navigation-top {
 		display: flex;
 		flex-direction: column;
@@ -230,6 +227,10 @@
 	}
 
 	/* MODIFIERS */
+
+	.traffic-lights-placeholder {
+		height: 30px;
+	}
 
 	.navigation.collapsed {
 		width: auto;

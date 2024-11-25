@@ -20,9 +20,35 @@ pub struct RemoteBranchFile {
     pub path: path::PathBuf,
     pub hunks: Vec<gitbutler_diff::GitHunk>,
     pub binary: bool,
+    pub large: bool,
 }
 
-pub(crate) fn list_remote_commit_files(
+impl From<FileDiff> for RemoteBranchFile {
+    fn from(mut file: FileDiff) -> Self {
+        // Diffs larger than 500kb are considered large
+        let large = file
+            .hunks
+            .iter()
+            .any(|hunk| hunk.diff_lines.len() > 500_000);
+
+        // If so, we return no diffs for the file.
+        if large {
+            file.hunks.iter_mut().for_each(|hunk| {
+                hunk.diff_lines.drain(..);
+            });
+        }
+
+        let binary = file.hunks.iter().any(|h| h.binary);
+        RemoteBranchFile {
+            path: file.path,
+            hunks: file.hunks,
+            binary,
+            large,
+        }
+    }
+}
+
+pub(crate) fn list_commit_files(
     repository: &git2::Repository,
     commit_id: git2::Oid,
 ) -> Result<Vec<RemoteBranchFile>> {
@@ -45,19 +71,8 @@ pub(crate) fn list_remote_commit_files(
     let parent_tree = repository
         .find_real_tree(&parent, Default::default())
         .context("failed to get parent tree")?;
-    let diff_files = gitbutler_diff::trees(repository, &parent_tree, &commit_tree)?;
-
-    Ok(diff_files
-        .into_iter()
-        .map(|(path, file)| {
-            let binary = file.hunks.iter().any(|h| h.binary);
-            RemoteBranchFile {
-                path,
-                hunks: file.hunks,
-                binary,
-            }
-        })
-        .collect())
+    let diff_files = gitbutler_diff::trees(repository, &parent_tree, &commit_tree, true)?;
+    Ok(diff_files.into_values().map(|file| file.into()).collect())
 }
 
 // this struct is a mapping to the view `File` type in Typescript
@@ -93,6 +108,7 @@ impl Get<VirtualBranchFile> for Vec<VirtualBranchFile> {
 pub(crate) fn list_virtual_commit_files(
     ctx: &CommandContext,
     commit: &git2::Commit,
+    context_lines: bool,
 ) -> Result<Vec<VirtualBranchFile>> {
     if commit.parent_count() == 0 {
         return Ok(vec![]);
@@ -105,7 +121,7 @@ pub(crate) fn list_virtual_commit_files(
     let parent_tree = repository
         .find_real_tree(&parent, Default::default())
         .context("failed to get parent tree")?;
-    let diff = gitbutler_diff::trees(ctx.repository(), &parent_tree, &commit_tree)?;
+    let diff = gitbutler_diff::trees(ctx.repository(), &parent_tree, &commit_tree, context_lines)?;
     let hunks_by_filepath = virtual_hunks_by_file_diffs(&ctx.project().path, diff);
     Ok(virtual_hunks_into_virtual_files(ctx, hunks_by_filepath))
 }

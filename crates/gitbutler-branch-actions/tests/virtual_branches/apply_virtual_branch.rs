@@ -72,7 +72,7 @@ fn rebase_commit() {
 
     {
         // fetch remote
-        gitbutler_branch_actions::update_base_branch(project).unwrap();
+        gitbutler_branch_actions::integrate_upstream(project, &[], None).unwrap();
 
         // branch is stil unapplied
         let (branches, _) = gitbutler_branch_actions::list_virtual_branches(project).unwrap();
@@ -93,6 +93,7 @@ fn rebase_commit() {
         branch1_id = gitbutler_branch_actions::create_virtual_branch_from_branch(
             project,
             &unapplied_branch,
+            None,
             None,
         )
         .unwrap();
@@ -176,7 +177,7 @@ fn rebase_work() {
 
     {
         // fetch remote
-        gitbutler_branch_actions::update_base_branch(project).unwrap();
+        gitbutler_branch_actions::integrate_upstream(project, &[], None).unwrap();
 
         // first branch is stil unapplied
         let (branches, _) = gitbutler_branch_actions::list_virtual_branches(project).unwrap();
@@ -191,6 +192,7 @@ fn rebase_work() {
         branch1_id = gitbutler_branch_actions::create_virtual_branch_from_branch(
             project,
             &unapplied_branch,
+            None,
             None,
         )
         .unwrap();

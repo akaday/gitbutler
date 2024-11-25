@@ -74,10 +74,18 @@ fn two_vbranches_in_workspace_one_commit() -> Result<()> {
         }),
     )?;
     assert_eq!(list.len(), 1, "only one of these is *not* applied");
+
+    let virtual_branch_state = VirtualBranchesHandle::new(ctx.project().gb_dir());
+    let unapplied = virtual_branch_state.list_all_stacks().unwrap();
+    let unapplied = unapplied
+        .iter()
+        .find(|stack| stack.name == "virtual")
+        .unwrap();
+
     assert_equal(
         &list[0],
         ExpectedBranchListing {
-            identity: "virtual".into(),
+            identity: (unapplied.source_refname.as_ref().unwrap().branch().unwrap()).into(),
             virtual_branch_given_name: Some("virtual"),
             virtual_branch_in_workspace: false,
             has_local: true,
@@ -102,13 +110,13 @@ fn one_feature_branch_and_one_vbranch_in_workspace_one_commit() -> Result<()> {
         &list[0],
         ExpectedBranchListing {
             identity: "main".into(),
-            remotes: vec!["origin"],
+            remotes: vec![],
             virtual_branch_given_name: Some("main"),
             virtual_branch_in_workspace: true,
             has_local: true,
         },
         "virtual branches can have the name of the target, even though it's probably not going to work when pushing. \
-        The remotes of the local `refs/heads/main` are shown."
+        The remotes of the local `refs/heads/main` are not shown"
     );
 
     Ok(())
@@ -125,12 +133,12 @@ fn one_branch_in_workspace_multiple_remotes() -> Result<()> {
         &list[0],
         ExpectedBranchListing {
             identity: "main".into(),
-            remotes: vec!["origin", "other-remote"],
+            remotes: vec!["other-remote"],
             virtual_branch_given_name: Some("main"),
             virtual_branch_in_workspace: true,
             has_local: true,
         },
-        "multiple remotes are detected",
+        "only the seconf remote is detected",
     );
     Ok(())
 }
@@ -229,4 +237,5 @@ mod util {
         Ok(branches)
     }
 }
+use gitbutler_stack::VirtualBranchesHandle;
 pub use util::{assert_equal, init_env, list_branches, project_ctx, ExpectedBranchListing};

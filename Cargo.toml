@@ -10,6 +10,7 @@ members = [
     "crates/gitbutler-sync",
     "crates/gitbutler-oplog",
     "crates/gitbutler-repo",
+    "crates/gitbutler-repo-actions",
     "crates/gitbutler-command-context",
     "crates/gitbutler-feedback",
     "crates/gitbutler-config",
@@ -33,27 +34,29 @@ members = [
     "crates/gitbutler-cherry-pick",
     "crates/gitbutler-oxidize",
     "crates/gitbutler-stack",
-    "crates/gitbutler-patch-reference",
+    "crates/gitbutler-hunk-dependency",
+    "crates/gitbutler-settings",
+    "crates/gitbutler-workspace",
 ]
 resolver = "2"
 
 [workspace.dependencies]
 bstr = "1.10.0"
 # Add the `tracing` or `tracing-detail` features to see more of gitoxide in the logs. Useful to see which programs it invokes.
-gix = { git = "https://github.com/Byron/gitoxide", rev = "72daa46bad9d397ef2cc48a3cffda23f414ccd8a", default-features = false, features = [
+gix = { git = "https://github.com/Byron/gitoxide", rev = "cf0c7ee4b3bbe83a6d894d960412b0274f9dc0e5", default-features = false, features = [
 ] }
 git2 = { version = "0.19.0", features = [
     "vendored-openssl",
     "vendored-libgit2",
 ] }
-uuid = { version = "1.8.0", features = ["serde"] }
+uuid = { version = "1.11.0", features = ["v4", "serde"] }
 serde = { version = "1.0", features = ["derive"] }
-thiserror = "1.0.64"
-tokio = { version = "1.40.0", default-features = false }
+thiserror = "1.0.66"
+tokio = { version = "1.41.0", default-features = false }
 keyring = "2.3.3"
-anyhow = "1.0.86"
+anyhow = "1.0.92"
 parking_lot = "0.12.3"
-futures = "0.3.30"
+futures = "0.3.31"
 toml = "0.8.13"
 tracing = "0.1.40"
 tracing-subscriber = "0.3.17"
@@ -67,6 +70,7 @@ gitbutler-branch-actions = { path = "crates/gitbutler-branch-actions" }
 gitbutler-sync = { path = "crates/gitbutler-sync" }
 gitbutler-oplog = { path = "crates/gitbutler-oplog" }
 gitbutler-repo = { path = "crates/gitbutler-repo" }
+gitbutler-repo-actions = { path = "crates/gitbutler-repo-actions" }
 gitbutler-command-context = { path = "crates/gitbutler-command-context" }
 gitbutler-feedback = { path = "crates/gitbutler-feedback" }
 gitbutler-config = { path = "crates/gitbutler-config" }
@@ -89,7 +93,10 @@ gitbutler-edit-mode = { path = "crates/gitbutler-edit-mode" }
 gitbutler-cherry-pick = { path = "crates/gitbutler-cherry-pick" }
 gitbutler-oxidize = { path = "crates/gitbutler-oxidize" }
 gitbutler-stack = { path = "crates/gitbutler-stack" }
-gitbutler-patch-reference = { path = "crates/gitbutler-patch-reference" }
+gitbutler-forge = { path = "crates/gitbutler-forge" }
+gitbutler-hunk-dependency = { path = "crates/gitbutler-hunk-dependency" }
+gitbutler-settings = { path = "crates/gitbutler-settings" }
+gitbutler-workspace = { path = "crates/gitbutler-workspace" }
 
 [profile.release]
 codegen-units = 1 # Compile crates one after another so the compiler can optimize better

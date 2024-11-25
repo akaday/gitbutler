@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { Project } from '$lib/backend/projects';
 	import { BaseBranchService } from '$lib/baseBranch/baseBranchService';
 	import BaseBranch from '$lib/components/BaseBranch.svelte';
 	import FullviewLoading from '$lib/components/FullviewLoading.svelte';
@@ -7,11 +6,10 @@
 	import ScrollableContainer from '$lib/scroll/ScrollableContainer.svelte';
 	import { SETTINGS, type Settings } from '$lib/settings/userSettings';
 	import Resizer from '$lib/shared/Resizer.svelte';
-	import { getContext, getContextStoreBySymbol } from '$lib/utils/context';
 	import { FileIdSelection } from '$lib/vbranches/fileIdSelection';
+	import { getContext, getContextStoreBySymbol } from '@gitbutler/shared/context';
 	import lscache from 'lscache';
 	import { onMount, setContext } from 'svelte';
-	import { writable } from 'svelte/store';
 
 	const defaultBranchWidthRem = 30;
 	const laneWidthKey = 'historyLaneWidth';
@@ -19,15 +17,14 @@
 
 	const baseBranchService = getContext(BaseBranchService);
 	const baseBranch = baseBranchService.base;
-	const project = getContext(Project);
 
-	const fileIdSelection = new FileIdSelection(project.id, writable([]));
+	const fileIdSelection = new FileIdSelection();
 	setContext(FileIdSelection, fileIdSelection);
 
 	const selectedFile = fileIdSelection.selectedFile;
 
-	$: commitId = $selectedFile?.[0];
-	$: selected = $selectedFile?.[1];
+	$: commitId = $selectedFile?.commitId;
+	$: selected = $selectedFile?.file;
 
 	let rsViewport: HTMLDivElement;
 	let laneWidth: number;
@@ -104,6 +101,6 @@
 	}
 	.card {
 		margin: 12px 6px 12px 12px;
-		padding: 16px;
+		border-radius: var(--radius-m);
 	}
 </style>

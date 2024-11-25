@@ -1,65 +1,51 @@
 <script lang="ts">
-	import { Project } from '$lib/backend/projects';
-	import { BranchListingService } from '$lib/branches/branchListing';
+	import { GitBranchService } from '$lib/branches/gitBranch';
 	import BranchPreview from '$lib/components/BranchPreview.svelte';
 	import FullviewLoading from '$lib/components/FullviewLoading.svelte';
-	import { getGitHostListingService } from '$lib/gitHost/interface/gitHostListingService';
-	import { RemoteBranchService } from '$lib/stores/remoteBranches';
-	import { getContext } from '$lib/utils/context';
-	import { groupBy } from '$lib/utils/groupBy';
-	import { error } from '$lib/utils/toasts';
-	import { Branch } from '$lib/vbranches/types';
-	import { goto } from '$app/navigation';
+	import { getForgeListingService } from '$lib/forge/interface/forgeListingService';
+	import { BranchData } from '$lib/vbranches/types';
+	import { getContext } from '@gitbutler/shared/context';
 	import { page } from '$app/stores';
 
-	const project = getContext(Project);
-	const branchListingService = getContext(BranchListingService);
-	const branchListings = branchListingService.branchListings;
+	const gitBranchService = getContext(GitBranchService);
 
-	const remoteBranchService = getContext(RemoteBranchService);
-	const branches = remoteBranchService.branches;
-	const branchesByGivenName = $derived(groupBy($branches, (branch) => branch.givenName));
+	const forgeListingService = getForgeListingService();
+	const name = $derived($page.params.name);
+	const prs = $derived($forgeListingService?.prs);
+	const pr = $derived($prs?.find((pr) => pr.sourceBranch === name));
 
-	const branchListing = $derived($branchListings.find((bl) => bl.name === $page.params.name));
-
-	const gitHostListingService = getGitHostListingService();
-	const prs = $derived($gitHostListingService?.prs);
-	const pr = $derived($prs?.find((pr) => pr.sourceBranch === branchListing?.name));
-
-	let localBranch = $state<Branch>();
-	let remoteBranches = $state<Branch[]>([]);
+	let localBranch = $state<BranchData>();
+	let remoteBranches = $state<BranchData[]>([]);
+	let loading = $state(false);
 
 	$effect(() => {
-		if (branchListing) {
-			if (branchListing.virtualBranch?.inWorkspace) {
-				goto(`/${project.id}/board`);
-				return;
-			}
-
-			const branchesWithGivenName: Branch[] | undefined = branchesByGivenName[branchListing.name];
-
-			if (branchesWithGivenName) {
-				localBranch = branchesWithGivenName.find((branch) => !branch.isRemote);
-
-				remoteBranches = branchesWithGivenName.filter((branch) => branch.isRemote);
-			} else {
-				error('Failed to find branch');
-				goto(`/${project.id}/board`);
-			}
-		}
+		if (!name) return;
+		findBranches(name);
 	});
+
+	async function findBranches(name: string) {
+		loading = true;
+		try {
+			const branches = await gitBranchService.findBranches(name);
+			localBranch = branches.find((branch) => !branch.isRemote);
+			remoteBranches = branches.filter((branch) => branch.isRemote);
+		} finally {
+			loading = false;
+		}
+	}
 </script>
 
-{#if $branchListings.length === 0}
+{#if loading}
 	<FullviewLoading />
-{:else if branchListing}
-	{#if remoteBranches.length === 0 && localBranch}
+{:else}
+	{#if localBranch && remoteBranches.length === 0}
 		<BranchPreview {localBranch} {pr} />
 	{:else}
 		{#each remoteBranches as remoteBranch}
-			<BranchPreview {localBranch} {remoteBranch} {pr} />
+			<BranchPreview {remoteBranch} {pr} />
 		{/each}
 	{/if}
-{:else}
-	<p>Branch doesn't seem to exist</p>
+	{#if !localBranch && remoteBranches.length === 0}
+		<p>Branch doesn't seem to exist</p>
+	{/if}
 {/if}

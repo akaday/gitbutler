@@ -2,8 +2,8 @@
 	import { BranchDragActionsFactory } from '$lib/branches/dragActions';
 	import CardOverlay from '$lib/dropzone/CardOverlay.svelte';
 	import Dropzone from '$lib/dropzone/Dropzone.svelte';
-	import { getContext, getContextStore } from '$lib/utils/context';
 	import { VirtualBranch } from '$lib/vbranches/types';
+	import { getContext, getContextStore } from '@gitbutler/shared/context';
 	import type { Snippet } from 'svelte';
 
 	const branchDragActionsFactory = getContext(BranchDragActionsFactory);
@@ -11,11 +11,28 @@
 
 	interface Props {
 		children: Snippet;
+		type?: 'commit' | 'file' | 'all';
 	}
 
-	const { children }: Props = $props();
+	const { children, type = 'all' }: Props = $props();
 
 	const actions = $derived(branchDragActionsFactory.build($branch));
+
+	const commitTypes: Props['type'][] = ['commit', 'all'];
+	function acceptsCommits(data: unknown) {
+		if (!commitTypes.includes(type)) {
+			return false;
+		}
+		return actions.acceptMoveCommit(data);
+	}
+
+	const fileTypes: Props['type'][] = ['file', 'all'];
+	function acceptsFiles(data: unknown) {
+		if (!fileTypes.includes(type)) {
+			return false;
+		}
+		return actions.acceptBranchDrop(data);
+	}
 </script>
 
 <div class="dragzone-wrapper">
@@ -24,11 +41,7 @@
 
 <!-- We require the dropzones to be nested -->
 {#snippet moveCommitDropzone()}
-	<Dropzone
-		accepts={actions.acceptMoveCommit.bind(actions)}
-		ondrop={actions.onMoveCommit.bind(actions)}
-		fillHeight
-	>
+	<Dropzone accepts={acceptsCommits} ondrop={actions.onMoveCommit.bind(actions)} fillHeight>
 		{@render branchDropDropzone()}
 
 		{#snippet overlay({ hovered, activated })}
@@ -38,11 +51,7 @@
 {/snippet}
 
 {#snippet branchDropDropzone()}
-	<Dropzone
-		accepts={actions.acceptBranchDrop.bind(actions)}
-		ondrop={actions.onBranchDrop.bind(actions)}
-		fillHeight
-	>
+	<Dropzone accepts={acceptsFiles} ondrop={actions.onBranchDrop.bind(actions)} fillHeight>
 		{@render children()}
 
 		{#snippet overlay({ hovered, activated })}

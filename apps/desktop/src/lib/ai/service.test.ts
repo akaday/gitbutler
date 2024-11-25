@@ -6,7 +6,14 @@ import {
 	SHORT_DEFAULT_COMMIT_TEMPLATE,
 	SHORT_DEFAULT_PR_TEMPLATE
 } from '$lib/ai/prompts';
-import { AISecretHandle, AIService, GitAIConfigKey, KeyOption, buildDiff } from '$lib/ai/service';
+import {
+	AISecretHandle,
+	AIService,
+	GitAIConfigKey,
+	KeyOption,
+	buildDiff,
+	type DiffInput
+} from '$lib/ai/service';
 import {
 	AnthropicModelName,
 	ModelKind,
@@ -14,10 +21,12 @@ import {
 	type AIClient,
 	type Prompt
 } from '$lib/ai/types';
-import { HttpClient } from '$lib/backend/httpClient';
 import { buildFailureFromAny, ok, unwrap, type Result } from '$lib/result';
+import { TokenMemoryService } from '$lib/stores/tokenMemoryService';
 import { Hunk } from '$lib/vbranches/types';
+import { HttpClient } from '@gitbutler/shared/httpClient';
 import { plainToInstance } from 'class-transformer';
+import { get } from 'svelte/store';
 import { expect, test, describe, vi } from 'vitest';
 import type { GbConfig, GitConfigService } from '$lib/backend/gitConfigService';
 import type { SecretsService } from '$lib/secrets/secretsService';
@@ -75,7 +84,8 @@ class DummySecretsService implements SecretsService {
 }
 
 const fetchMock = vi.fn();
-const cloud = new HttpClient(fetchMock);
+const tokenMemoryService = new TokenMemoryService();
+const cloud = new HttpClient(fetchMock, 'https://www.example.com', tokenMemoryService.token);
 
 class DummyAIClient implements AIClient {
 	defaultCommitTemplate = SHORT_DEFAULT_COMMIT_TEMPLATE;
@@ -133,27 +143,36 @@ const hunk2 = plainToInstance(Hunk, {
 });
 
 const exampleHunks = [hunk1, hunk2];
+const exampleDiffs: DiffInput[] = exampleHunks.map((hunk) => ({
+	diff: hunk.diff,
+	filePath: hunk.filePath
+}));
 
 function buildDefaultAIService() {
 	const gitConfig = new DummyGitConfigService(structuredClone(defaultGitConfig));
 	const secretsService = new DummySecretsService(structuredClone(defaultSecretsConfig));
-	return new AIService(gitConfig, secretsService, cloud);
+	return new AIService(gitConfig, secretsService, cloud, tokenMemoryService);
 }
 
-describe.concurrent('AIService', () => {
-	describe.concurrent('#buildModel', () => {
+describe('AIService', () => {
+	describe('#buildModel', () => {
 		test('With default configuration, When a user token is provided. It returns ButlerAIClient', async () => {
+			tokenMemoryService.setToken('test-token');
+			console.log(get(tokenMemoryService.token));
 			const aiService = buildDefaultAIService();
 
-			expect(unwrap(await aiService.buildClient('token'))).toBeInstanceOf(ButlerAIClient);
+			expect(unwrap(await aiService.buildClient())).toBeInstanceOf(ButlerAIClient);
+			tokenMemoryService.setToken(undefined);
 		});
 
 		test('With default configuration, When a user is undefined. It returns undefined', async () => {
+			tokenMemoryService.setToken(undefined);
 			const aiService = buildDefaultAIService();
 
 			expect(await aiService.buildClient()).toStrictEqual(
 				buildFailureFromAny("When using GitButler's API to summarize code, you must be logged in")
 			);
+			tokenMemoryService.setToken(undefined);
 		});
 
 		test('When token is bring your own, When a openAI token is present. It returns OpenAIClient', async () => {
@@ -162,7 +181,7 @@ describe.concurrent('AIService', () => {
 				[GitAIConfigKey.OpenAIKeyOption]: KeyOption.BringYourOwn
 			});
 			const secretsService = new DummySecretsService({ [AISecretHandle.OpenAIKey]: 'sk-asdfasdf' });
-			const aiService = new AIService(gitConfig, secretsService, cloud);
+			const aiService = new AIService(gitConfig, secretsService, cloud, tokenMemoryService);
 
 			expect(unwrap(await aiService.buildClient())).toBeInstanceOf(OpenAIClient);
 		});
@@ -173,7 +192,7 @@ describe.concurrent('AIService', () => {
 				[GitAIConfigKey.OpenAIKeyOption]: KeyOption.BringYourOwn
 			});
 			const secretsService = new DummySecretsService();
-			const aiService = new AIService(gitConfig, secretsService, cloud);
+			const aiService = new AIService(gitConfig, secretsService, cloud, tokenMemoryService);
 
 			expect(await aiService.buildClient()).toStrictEqual(
 				buildFailureFromAny(
@@ -191,7 +210,7 @@ describe.concurrent('AIService', () => {
 			const secretsService = new DummySecretsService({
 				[AISecretHandle.AnthropicKey]: 'test-key'
 			});
-			const aiService = new AIService(gitConfig, secretsService, cloud);
+			const aiService = new AIService(gitConfig, secretsService, cloud, tokenMemoryService);
 
 			expect(unwrap(await aiService.buildClient())).toBeInstanceOf(AnthropicAIClient);
 		});
@@ -203,7 +222,7 @@ describe.concurrent('AIService', () => {
 				[GitAIConfigKey.AnthropicKeyOption]: KeyOption.BringYourOwn
 			});
 			const secretsService = new DummySecretsService();
-			const aiService = new AIService(gitConfig, secretsService, cloud);
+			const aiService = new AIService(gitConfig, secretsService, cloud, tokenMemoryService);
 
 			expect(await aiService.buildClient()).toStrictEqual(
 				buildFailureFromAny(
@@ -221,7 +240,7 @@ describe.concurrent('AIService', () => {
 				(async () => buildFailureFromAny('Failed to build'))()
 			);
 
-			expect(await aiService.summarizeCommit({ hunks: exampleHunks })).toStrictEqual(
+			expect(await aiService.summarizeCommit({ diffInput: exampleDiffs })).toStrictEqual(
 				buildFailureFromAny('Failed to build')
 			);
 		});
@@ -235,7 +254,7 @@ describe.concurrent('AIService', () => {
 				(async () => ok<AIClient, Error>(new DummyAIClient(clientResponse)))()
 			);
 
-			expect(await aiService.summarizeCommit({ hunks: exampleHunks })).toStrictEqual(
+			expect(await aiService.summarizeCommit({ diffInput: exampleDiffs })).toStrictEqual(
 				ok('single line commit')
 			);
 		});
@@ -249,7 +268,7 @@ describe.concurrent('AIService', () => {
 				(async () => ok<AIClient, Error>(new DummyAIClient(clientResponse)))()
 			);
 
-			expect(await aiService.summarizeCommit({ hunks: exampleHunks })).toStrictEqual(
+			expect(await aiService.summarizeCommit({ diffInput: exampleDiffs })).toStrictEqual(
 				ok('one\n\nnew line')
 			);
 		});
@@ -264,7 +283,7 @@ describe.concurrent('AIService', () => {
 			);
 
 			expect(
-				await aiService.summarizeCommit({ hunks: exampleHunks, useBriefStyle: true })
+				await aiService.summarizeCommit({ diffInput: exampleDiffs, useBriefStyle: true })
 			).toStrictEqual(ok('one'));
 		});
 	});
@@ -342,9 +361,9 @@ describe.concurrent('buildDiff', () => {
 		const expectedOutput2 = `${hunk2.filePath} - ${hunk2.diff}\n${hunk1.filePath} - ${hunk1.diff}`;
 
 		const outputMatchesExpectedValue = [expectedOutput1, expectedOutput2].includes(
-			buildDiff([hunk1, hunk1], 10000)
+			buildDiff([hunk1, hunk2], 10000)
 		);
 
-		expect(outputMatchesExpectedValue).toBeTruthy;
+		expect(outputMatchesExpectedValue).toBeTruthy();
 	});
 });

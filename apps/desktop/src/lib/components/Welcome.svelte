@@ -3,12 +3,12 @@
 	import WelcomeSigninAction from './WelcomeSigninAction.svelte';
 	import cloneRepoSvg from '$lib/assets/welcome/clone-repo.svg?raw';
 	import newProjectSvg from '$lib/assets/welcome/new-local-project.svg?raw';
-	import { ProjectService } from '$lib/backend/projects';
+	import { ProjectsService } from '$lib/backend/projects';
 	import IconLink from '$lib/shared/IconLink.svelte';
-	import { getContext } from '$lib/utils/context';
+	import { getContext } from '@gitbutler/shared/context';
 	import { goto } from '$app/navigation';
 
-	const projectService = getContext(ProjectService);
+	const projectsService = getContext(ProjectsService);
 
 	let newProjectLoading = $state(false);
 	let directoryInputElement = $state<HTMLInputElement | undefined>();
@@ -17,7 +17,7 @@
 		newProjectLoading = true;
 		try {
 			const testDirectoryPath = directoryInputElement?.value;
-			await projectService.addProject(testDirectoryPath ?? '');
+			await projectsService.addProject(testDirectoryPath ?? '');
 		} finally {
 			newProjectLoading = false;
 		}
@@ -29,7 +29,7 @@
 </script>
 
 <div class="welcome">
-	<h1 class="welcome-title text-serif-40" data-tauri-drag-region>Welcome to GitButler</h1>
+	<h1 class="welcome-title text-serif-40">Welcome to GitButler</h1>
 	<div class="welcome__actions">
 		<div class="welcome__actions--repo">
 			<input
@@ -65,7 +65,7 @@
 		<WelcomeSigninAction />
 	</div>
 
-	<div class="links" data-tauri-drag-region>
+	<div class="links">
 		<div class="links__section">
 			<p class="links__title text-14 text-bold">Quick start</p>
 			<div class="education-links">

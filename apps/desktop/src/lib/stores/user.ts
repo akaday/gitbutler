@@ -1,13 +1,14 @@
 import { resetPostHog, setPostHogUser } from '$lib/analytics/posthog';
 import { resetSentry, setSentryUser } from '$lib/analytics/sentry';
-import { API_URL, type HttpClient } from '$lib/backend/httpClient';
 import { invoke } from '$lib/backend/ipc';
 import { showError } from '$lib/notifications/toasts';
 import { copyToClipboard } from '$lib/utils/clipboard';
 import { sleep } from '$lib/utils/sleep';
 import { openExternalUrl } from '$lib/utils/url';
+import { type HttpClient } from '@gitbutler/shared/httpClient';
 import { plainToInstance } from 'class-transformer';
 import { derived, writable } from 'svelte/store';
+import type { TokenMemoryService } from '$lib/stores/tokenMemoryService';
 
 export type LoginToken = {
 	token: string;
@@ -27,6 +28,7 @@ export class UserService {
 		const userData = await invoke<User | undefined>('get_user');
 		if (userData) {
 			const user = plainToInstance(User, userData);
+			this.tokenMemoryService.setToken(user.access_token);
 			this.user.set(user);
 			setPostHogUser(user);
 			setSentryUser(user);
@@ -35,24 +37,35 @@ export class UserService {
 		this.user.set(undefined);
 	}
 	readonly accessToken$ = derived(this.user, (user) => {
-		user?.github_access_token;
+		if (user?.github_access_token) {
+			return user.github_access_token;
+		}
+		return undefined;
 	});
 
-	constructor(private httpClient: HttpClient) {}
+	constructor(
+		private httpClient: HttpClient,
+		private tokenMemoryService: TokenMemoryService
+	) {}
 
 	async setUser(user: User | undefined) {
-		if (user) await invoke('set_user', { user });
-		else await this.clearUser();
+		if (user) {
+			await invoke('set_user', { user });
+			this.tokenMemoryService.setToken(user.access_token);
+		} else {
+			await this.clearUser();
+		}
 		this.user.set(user);
 	}
 
-	async clearUser() {
+	private async clearUser() {
 		await invoke('delete_user');
 	}
 
 	async logout() {
 		await this.clearUser();
 		this.user.set(undefined);
+		this.tokenMemoryService.setToken(undefined);
 		resetPostHog();
 		resetSentry();
 	}
@@ -64,7 +77,7 @@ export class UserService {
 			// Create login token
 			const token = await this.httpClient.post<LoginToken>('login/token.json');
 			const url = new URL(token.url);
-			url.host = API_URL.host;
+			url.host = this.httpClient.apiUrl.host;
 
 			action(url.toString());
 
@@ -72,6 +85,7 @@ export class UserService {
 			await sleep(4000);
 
 			const user = await this.pollForUser(token.token);
+			this.tokenMemoryService.setToken(undefined);
 			this.setUser(user);
 
 			return user;
@@ -97,7 +111,7 @@ export class UserService {
 		});
 	}
 
-	async pollForUser(token: string): Promise<User | undefined> {
+	private async pollForUser(token: string): Promise<User | undefined> {
 		let apiUser: User | null;
 		for (let i = 0; i < 120; i++) {
 			apiUser = await this.getLoginUser(token).catch(() => null);
@@ -110,15 +124,15 @@ export class UserService {
 	}
 
 	// TODO: Remove token from URL, we don't want that leaking into logs.
-	async getLoginUser(token: string): Promise<User> {
+	private async getLoginUser(token: string): Promise<User> {
 		return await this.httpClient.get(`login/user/${token}.json`);
 	}
 
-	async getUser(token: string): Promise<User> {
-		return await this.httpClient.get('user.json', { token });
+	async getUser(): Promise<User> {
+		return await this.httpClient.get('user.json');
 	}
 
-	async updateUser(token: string, params: { name?: string; picture?: File }): Promise<any> {
+	async updateUser(params: { name?: string; picture?: File }): Promise<any> {
 		const formData = new FormData();
 		if (params.name) formData.append('name', params.name);
 		if (params.picture) formData.append('avatar', params.picture);
@@ -126,8 +140,7 @@ export class UserService {
 		// Content Type must be unset for the right form-data border to be set automatically
 		return await this.httpClient.put('user.json', {
 			body: formData,
-			headers: { 'Content-Type': undefined },
-			token
+			headers: { 'Content-Type': undefined }
 		});
 	}
 }
@@ -137,9 +150,9 @@ export class User {
 	name: string | undefined;
 	given_name: string | undefined;
 	family_name: string | undefined;
-	email!: string;
+	email!: string | undefined;
 	picture!: string;
-	locale!: string;
+	locale!: string | undefined;
 	created_at!: string;
 	updated_at!: string;
 	access_token!: string;

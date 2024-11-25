@@ -6,7 +6,7 @@ authors = ["GitButler <gitbutler@gitbutler.com>"]
 publish = false
 
 [dependencies]
-anyhow = "1.0.86"
+anyhow = "1.0.92"
 git2.workspace = true
 gitbutler-repo.workspace = true
 serde = { workspace = true, features = ["std"] }
@@ -17,11 +17,13 @@ gix = { workspace = true, features = ["dirwalk", "credentials", "parallel"] }
 toml.workspace = true
 gitbutler-command-context.workspace = true
 gitbutler-project.workspace = true
+gitbutler-oxidize.workspace = true
 gitbutler-branch.workspace = true
 gitbutler-serde.workspace = true
 gitbutler-fs.workspace = true
 gitbutler-reference.workspace = true
 gitbutler-diff.workspace = true
+gitbutler-stack.workspace = true
 
 [[test]]
 name = "oplog"

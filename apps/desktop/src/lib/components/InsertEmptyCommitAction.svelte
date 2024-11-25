@@ -1,21 +1,17 @@
 <script lang="ts">
 	import Button from '@gitbutler/ui/Button.svelte';
-	import { createEventDispatcher } from 'svelte';
 
-	export let isLast = false;
-	export let isFirst = false;
-	export let isMiddle = false;
+	interface Props {
+		isLast?: boolean;
+		isFirst?: boolean;
+		onclick?: () => void;
+	}
 
-	const dispatch = createEventDispatcher<{ click: void }>();
+	const { isLast = false, isFirst = false, onclick }: Props = $props();
 </script>
 
-<div
-	class="line-container"
-	class:is-last={isLast}
-	class:is-first={isFirst}
-	class:is-middle={isMiddle}
->
-	<div class="hover-target">
+<div class="line-container" class:is-last={isLast} class:is-first={isFirst}>
+	<div class="barnch-plus-btn">
 		<Button
 			style="ghost"
 			outline
@@ -25,7 +21,7 @@
 			width={26}
 			tooltip="Insert empty commit"
 			helpShowDelay={500}
-			onclick={() => dispatch('click')}
+			onclick={onclick?.()}
 		/>
 	</div>
 </div>
@@ -45,11 +41,10 @@
 		/* background-color: rgba(235, 167, 78, 0.159); */
 
 		&:hover {
-			& .hover-target {
-				transition-delay: 0.08s;
+			& .barnch-plus-btn {
 				pointer-events: all;
-				transform: translateY(-50%);
 				opacity: 1;
+				transform: translateY(-50%) scale(1);
 			}
 		}
 
@@ -76,33 +71,18 @@
 		}
 	}
 
-	.hover-target {
+	.barnch-plus-btn {
 		position: absolute;
 		top: 50%;
 		right: 24px;
-		transform: translateY(-50%);
 		width: fit-content;
+		display: flex;
 		align-items: center;
-		transform: translateY(calc(-50% + 4px));
+		transform: translateY(-45%) scale(0.8);
 		opacity: 0;
 		pointer-events: none;
 		transition:
 			opacity var(--transition-fast),
 			transform var(--transition-medium);
-		transition-delay: 0s;
-	}
-
-	/* MODIFIERS */
-
-	.line-container.is-last {
-		transform: translateY(-4px);
-	}
-
-	.line-container.is-first {
-		transform: translateY(16px);
-	}
-
-	.line-container.is-middle {
-		transform: translateY(6px);
 	}
 </style>

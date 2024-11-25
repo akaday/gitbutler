@@ -141,6 +141,7 @@ pub enum OperationKind {
     GenericBranchUpdate,
     DeleteBranch,
     ApplyBranch,
+    DiscardLines,
     DiscardHunk,
     DiscardFile,
     AmendCommit,
@@ -156,6 +157,12 @@ pub enum OperationKind {
     MoveCommitFile,
     FileChanges,
     EnterEditMode,
+    SyncWorkspace,
+    CreateDependentBranch,
+    RemoveDependentBranch,
+    UpdateDependentBranchName,
+    UpdateDependentBranchDescription,
+    UpdateDependentBranchPrNumber,
     #[default]
     Unknown,
 }

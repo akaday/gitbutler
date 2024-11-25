@@ -1,5 +1,6 @@
 use anyhow::Result;
 use gitbutler_project::Project;
+use std::path::Path;
 
 pub struct CommandContext {
     /// The git repository of the `project` itself.
@@ -13,20 +14,12 @@ impl CommandContext {
     pub fn open(project: &Project) -> Result<Self> {
         let repo = git2::Repository::open(&project.path)?;
 
-        // XXX(qix-): This is a temporary measure to disable GC on the project repository.
-        // XXX(qix-): We do this because the internal repository we use to store the "virtual"
-        // XXX(qix-): refs and information use Git's alternative-objects mechanism to refer
-        // XXX(qix-): to the project repository's objects. However, the project repository
-        // XXX(qix-): has no knowledge of these refs, and will GC them away (usually after
-        // XXX(qix-): about 2 weeks) which will corrupt the internal repository.
-        // XXX(qix-):
-        // XXX(qix-): We will ultimately move away from an internal repository for a variety
-        // XXX(qix-): of reasons, but for now, this is a simple, short-term solution that we
-        // XXX(qix-): can clean up later on. We're aware this isn't ideal.
+        // Previously the app used to set `gc.pruneExpire=never`, disabling GC in order to prevent GitButler trees from being pruned.
+        // With the introduciton of the operations log, the trees that the app needs are referenced through the reflog hack (`gitbutler-oplog` reflog.rs).
+        // This code will now look for `gitbutler.didSetPrune`, and if set, it will undo the change by removing the `gc.pruneExpire` and `gitbutler.didSetPrune` entries.
         if let Ok(config) = repo.config().as_mut() {
-            let should_set = match config.get_bool("gitbutler.didSetPrune") {
-                Ok(false) => true,
-                Ok(true) => false,
+            let did_set_prune = match config.get_bool("gitbutler.didSetPrune") {
+                Ok(did_set_prune) => did_set_prune, // If `gitbutler.didSetPrune` was previously set, we want to undo the change
                 Err(err) => {
                     tracing::trace!(
                                 "failed to get gitbutler.didSetPrune for repository at {}; cannot disable gc: {}",
@@ -37,16 +30,16 @@ impl CommandContext {
                 }
             };
 
-            if should_set {
+            if did_set_prune {
                 if let Err(error) = config
-                    .set_str("gc.pruneExpire", "never")
-                    .and_then(|()| config.set_bool("gitbutler.didSetPrune", true))
+                    .remove("gc.pruneExpire")
+                    .and_then(|()| config.remove("gitbutler.didSetPrune"))
                 {
                     tracing::warn!(
-                                "failed to set gc.auto to false for repository at {}; cannot disable gc: {}",
-                                project.path.display(),
-                                error
-                            );
+                        "failed to remove gc.pruneExpire and gitbutler.didSetPrune for repository at {}: {}",
+                        project.path.display(),
+                        error
+                    );
                 }
             }
         } else {
@@ -86,6 +79,23 @@ impl CommandContext {
         Ok(gix::open(self.repository().path())?)
     }
 
+    /// Return a newly opened `gitoxide` repository, with all configuration available
+    /// to correctly figure out author and committer names (i.e. with most global configuration loaded),
+    /// *and* which will perform diffs quickly thanks to an adequate object cache.
+    pub fn gix_repository_for_merging(&self) -> Result<gix::Repository> {
+        gix_repository_for_merging(self.repository().path())
+    }
+
+    /// Return a newly opened `gitoxide` repository, with all configuration available
+    /// to correctly figure out author and committer names (i.e. with most global configuration loaded),
+    /// *and* which will perform diffs quickly thanks to an adequate object cache, *and*
+    /// which **writes all objects into memory**.
+    ///
+    /// This means *changes are non-persisting*.
+    pub fn gix_repository_for_merging_non_persisting(&self) -> Result<gix::Repository> {
+        Ok(self.gix_repository_for_merging()?.with_object_memory())
+    }
+
     /// Return a newly opened `gitoxide` repository with only the repository-local configuration
     /// available. This is a little faster as it has to open less files upon startup.
     ///
@@ -97,6 +107,16 @@ impl CommandContext {
             gix::open::Options::isolated(),
         )?)
     }
+}
+
+/// Return a newly opened `gitoxide` repository, with all configuration available
+/// to correctly figure out author and committer names (i.e. with most global configuration loaded),
+/// *and* which will perform diffs quickly thanks to an adequate object cache.
+pub fn gix_repository_for_merging(worktree_or_git_dir: &Path) -> Result<gix::Repository> {
+    let mut repo = gix::open(worktree_or_git_dir)?;
+    let bytes = repo.compute_object_cache_size_for_tree_diffs(&***repo.index_or_empty()?);
+    repo.object_cache_size_if_unset(bytes);
+    Ok(repo)
 }
 
 mod repository_ext;

@@ -7,9 +7,8 @@
 	import { AIService } from '$lib/ai/service';
 	import { AuthService } from '$lib/backend/auth';
 	import { GitConfigService } from '$lib/backend/gitConfigService';
-	import { HttpClient } from '$lib/backend/httpClient';
-	import { invoke } from '$lib/backend/ipc';
-	import { ProjectService } from '$lib/backend/projects';
+	import { CommandService, invoke } from '$lib/backend/ipc';
+	import { ProjectsService } from '$lib/backend/projects';
 	import { PromptService } from '$lib/backend/prompt';
 	import { UpdaterService } from '$lib/backend/updater';
 	import GlobalSettingsMenuAction from '$lib/barmenuActions/GlobalSettingsMenuAction.svelte';
@@ -23,25 +22,35 @@
 	import AppUpdater from '$lib/components/AppUpdater.svelte';
 	import PromptModal from '$lib/components/PromptModal.svelte';
 	import ShareIssueModal from '$lib/components/ShareIssueModal.svelte';
+	import { AppSettings } from '$lib/config/appSettings';
 	import {
 		createGitHubUserServiceStore as createGitHubUserServiceStore,
 		GitHubUserService
-	} from '$lib/gitHost/github/githubUserService';
-	import { octokitFromAccessToken } from '$lib/gitHost/github/octokit';
+	} from '$lib/forge/github/githubUserService';
+	import { octokitFromAccessToken } from '$lib/forge/github/octokit';
 	import ToastController from '$lib/notifications/ToastController.svelte';
+	import { platformName } from '$lib/platform/platform';
 	import { RemotesService } from '$lib/remotes/service';
 	import { setSecretsService } from '$lib/secrets/secretsService';
 	import { SETTINGS, loadUserSettings } from '$lib/settings/userSettings';
 	import { User, UserService } from '$lib/stores/user';
 	import * as events from '$lib/utils/events';
 	import { unsubscribe } from '$lib/utils/unsubscribe';
+	import { HttpClient } from '@gitbutler/shared/httpClient';
+	import { AppDispatch, AppState } from '@gitbutler/shared/redux/store';
+	import {
+		DesktopRoutesService,
+		setRoutesService,
+		WebRoutesService
+	} from '@gitbutler/shared/sharedRoutes';
 	import { LineManagerFactory } from '@gitbutler/ui/commitLines/lineManager';
-	import { LineManagerFactory as StackingLineManagerFactory } from '@gitbutler/ui/commitLinesStacking/lineManager';
+	import { LineManagerFactory as StackingLineManagerFactory } from '@gitbutler/ui/commitLines/lineManager';
 	import { onMount, setContext, type Snippet } from 'svelte';
 	import { Toaster } from 'svelte-french-toast';
 	import type { LayoutData } from './$types';
 	import { dev } from '$app/environment';
 	import { goto } from '$app/navigation';
+	import { env } from '$env/dynamic/public';
 
 	const { data, children }: { data: LayoutData; children: Snippet } = $props();
 
@@ -50,8 +59,11 @@
 
 	// Setters do not need to be reactive since `data` never updates
 	setSecretsService(data.secretsService);
+	setContext(AppState, data.appState);
+	setContext(AppDispatch, data.appState.appDispatch);
+	setContext(CommandService, data.commandService);
 	setContext(UserService, data.userService);
-	setContext(ProjectService, data.projectService);
+	setContext(ProjectsService, data.projectsService);
 	setContext(UpdaterService, data.updaterService);
 	setContext(GitConfigService, data.gitConfig);
 	setContext(AIService, data.aiService);
@@ -63,6 +75,11 @@
 	setContext(AIPromptService, data.aiPromptService);
 	setContext(LineManagerFactory, data.lineManagerFactory);
 	setContext(StackingLineManagerFactory, data.stackingLineManagerFactory);
+	setContext(AppSettings, data.appSettings);
+
+	const webRoutesService = new WebRoutesService(true, env.PUBLIC_CLOUD_BASE_URL);
+	const desktopRoutesService = new DesktopRoutesService(webRoutesService);
+	setRoutesService(desktopRoutesService);
 
 	setNameNormalizationServiceContext(new IpcNameNormalizationService(invoke));
 
@@ -90,12 +107,10 @@
 
 <svelte:window on:drop={(e) => e.preventDefault()} on:dragover={(e) => e.preventDefault()} />
 
-<div
-	data-tauri-drag-region
-	class="app-root"
-	role="application"
-	oncontextmenu={(e) => !dev && e.preventDefault()}
->
+<div class="app-root" role="application" oncontextmenu={(e) => !dev && e.preventDefault()}>
+	{#if platformName === 'macos'}
+		<div class="drag-region" data-tauri-drag-region></div>
+	{/if}
 	{@render children()}
 </div>
 <Toaster />
@@ -114,5 +129,14 @@
 		height: 100%;
 		user-select: none;
 		cursor: default;
+	}
+
+	.drag-region {
+		z-index: var(--z-modal);
+		position: fixed;
+		top: 0;
+		left: 0;
+		width: 100%;
+		height: 14px;
 	}
 </style>

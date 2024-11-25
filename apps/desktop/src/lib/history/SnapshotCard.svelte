@@ -2,8 +2,8 @@
 	import SnapshotAttachment from './SnapshotAttachment.svelte';
 	import { createdOnDay } from '$lib/history/history';
 	import { ModeService } from '$lib/modes/service';
-	import { getContext } from '$lib/utils/context';
 	import { toHumanReadableTime } from '$lib/utils/time';
+	import { getContext } from '@gitbutler/shared/context';
 	import Button from '@gitbutler/ui/Button.svelte';
 	import Icon from '@gitbutler/ui/Icon.svelte';
 	import FileIcon from '@gitbutler/ui/file/FileIcon.svelte';
@@ -46,7 +46,7 @@
 
 	function mapOperation(snapshotDetails: SnapshotDetails | undefined): {
 		text: string;
-		icon: keyof typeof iconsJson;
+		icon?: keyof typeof iconsJson;
 		commitMessage?: string;
 	} {
 		if (!snapshotDetails) return { text: '', icon: 'commit' };
@@ -132,6 +132,8 @@
 					text: `Move hunk to "${entry.details?.trailers.find((t) => t.key === 'name')?.value}"`,
 					icon: 'item-move'
 				};
+			case 'DiscardLines':
+				return { text: 'Discard lines', icon: 'item-cross' };
 			case 'DiscardHunk':
 				return { text: 'Discard hunk', icon: 'item-cross' };
 			case 'DiscardFile':
@@ -144,10 +146,10 @@
 				return { text: 'Merge upstream', icon: 'merged-pr-small' };
 			case 'UpdateWorkspaceBase':
 				return { text: 'Update workspace base', icon: 'rebase' };
-			case 'RestoreFromSnapshot':
-				return { text: 'Revert snapshot', icon: 'empty' };
 			case 'EnterEditMode':
 				return { text: 'Enter Edit Mode', icon: 'edit-text' };
+			case 'RestoreFromSnapshot':
+				return { text: 'Revert snapshot' };
 			default:
 				return { text: snapshotDetails.operation, icon: 'commit' };
 		}
@@ -187,7 +189,7 @@
 	<div class="snapshot-line">
 		{#if isRestoreSnapshot}
 			<img src="/images/history/restore-icon.svg" alt="" />
-		{:else}
+		{:else if operation.icon}
 			<Icon name={operation.icon} />
 		{/if}
 	</div>
@@ -200,7 +202,7 @@
 			</h4>
 
 			{#if operation.commitMessage}
-				<p class="text-12 snapshot-commit-message">
+				<p class="text-12 text-body snapshot-commit-message">
 					<span>Message:</span>
 					{operation.commitMessage}
 				</p>
@@ -215,6 +217,7 @@
 				<div class="files-attacment">
 					{#each entry.filesChanged as filePath}
 						<button
+							type="button"
 							class="files-attacment__file"
 							class:file-selected={selectedFile?.path === filePath &&
 								selectedFile?.entryId === entry.id}

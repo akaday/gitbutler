@@ -2,8 +2,8 @@
 	import AccountLink from '../shared/AccountLink.svelte';
 	import gbLogoSvg from '$lib/assets/gb-logo.svg?raw';
 	import { User } from '$lib/stores/user';
-	import { getContextStore } from '$lib/utils/context';
 	import { openExternalUrl } from '$lib/utils/url';
+	import { getContextStore } from '@gitbutler/shared/context';
 	import Icon from '@gitbutler/ui/Icon.svelte';
 	import { type Snippet } from 'svelte';
 
@@ -21,7 +21,7 @@
 </script>
 
 <div class="decorative-split-view">
-	<div class="left-side hide-native-scrollbar" data-tauri-drag-region>
+	<div class="left-side hide-native-scrollbar">
 		<div class="left-side__content">
 			{#if children}
 				{@render children()}
@@ -29,10 +29,10 @@
 		</div>
 	</div>
 
-	<div class="right-side" data-tauri-drag-region>
-		<div class="right-side-wrapper" data-tauri-drag-region>
+	<div class="right-side">
+		<div class="right-side-wrapper">
 			{#if user}
-				<div class="right-side__header" data-tauri-drag-region>
+				<div class="right-side__header">
 					<div class="account-button">
 						<AccountLink pop />
 					</div>
@@ -45,7 +45,7 @@
 				</div>
 			{/if}
 
-			<div class="right-side__bottom" data-tauri-drag-region>
+			<div class="right-side__bottom">
 				{#if title || description}
 					<div class="right-side__content">
 						{#if title}
@@ -70,6 +70,7 @@
 					<div class="right-side__meta">
 						<div class="right-side__links">
 							<button
+								type="button"
 								class="right-side__link"
 								onclick={async () => await openExternalUrl('https://docs.gitbutler.com/')}
 							>
@@ -77,6 +78,7 @@
 								<span class="text-14 text-semibold">GitButler docs</span>
 							</button>
 							<button
+								type="button"
 								class="right-side__link"
 								onclick={async () => await openExternalUrl('https://discord.com/invite/MmFkmaJ42D')}
 							>
@@ -218,13 +220,7 @@
 		width: 100%;
 		height: 2px;
 		border: none;
-		background: repeating-linear-gradient(
-			to right,
-			var(--fill-color),
-			var(--fill-color) 1px,
-			transparent 1px,
-			transparent 4px
-		);
+		background-image: linear-gradient(to right, var(--fill-color) 50%, transparent 50%);
 		background-size: 4px 4px;
 		opacity: 0.5;
 	}

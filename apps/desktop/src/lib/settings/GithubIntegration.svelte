@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { checkAuthStatus, initDeviceOauth } from '$lib/backend/github';
 	import SectionCard from '$lib/components/SectionCard.svelte';
-	import { getGitHubUserServiceStore } from '$lib/gitHost/github/githubUserService';
+	import { getGitHubUserServiceStore } from '$lib/forge/github/githubUserService';
 	import { UserService } from '$lib/stores/user';
 	import { copyToClipboard } from '$lib/utils/clipboard';
-	import { getContext } from '$lib/utils/context';
 	import * as toasts from '$lib/utils/toasts';
 	import { openExternalUrl } from '$lib/utils/url';
+	import { getContext } from '@gitbutler/shared/context';
 	import Button from '@gitbutler/ui/Button.svelte';
 	import Icon from '@gitbutler/ui/Icon.svelte';
 	import Modal from '@gitbutler/ui/Modal.svelte';
@@ -27,13 +27,13 @@
 	let loading = false;
 	let userCode = '';
 	let deviceCode = '';
-	let gitHubOauthModal: Modal;
+	let gitHubOauthModal: ReturnType<typeof Modal> | undefined;
 
 	function gitHubStartOauth() {
 		initDeviceOauth().then((verification) => {
 			userCode = verification.user_code;
 			deviceCode = verification.device_code;
-			gitHubOauthModal.show();
+			gitHubOauthModal?.show();
 		});
 	}
 
@@ -52,7 +52,7 @@
 			console.error(err);
 			toasts.error('GitHub authentication failed');
 		} finally {
-			gitHubOauthModal.close();
+			gitHubOauthModal?.close();
 			loading = false;
 		}
 	}

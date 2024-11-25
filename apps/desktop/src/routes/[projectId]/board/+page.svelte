@@ -3,37 +3,39 @@
 	import { BaseBranchService } from '$lib/baseBranch/baseBranchService';
 	import Board from '$lib/components/Board.svelte';
 	import { projectHttpsWarningBannerDismissed } from '$lib/config/config';
-	import { getGitHost } from '$lib/gitHost/interface/gitHost';
+	import { getForge } from '$lib/forge/interface/forge';
 	import { ModeService } from '$lib/modes/service';
 	import { showToast } from '$lib/notifications/toasts';
 	import Scrollbar from '$lib/scroll/Scrollbar.svelte';
-	import { getContext } from '$lib/utils/context';
+	import { getContext } from '@gitbutler/shared/context';
 	import { goto } from '$app/navigation';
 
 	const project = getContext(Project);
-	const gitHost = getGitHost();
+	const forge = getForge();
 	const baseBranchService = getContext(BaseBranchService);
-	const baseBranch = baseBranchService.base;
+	const baseRepo = $derived(baseBranchService.repo);
 
-	let viewport: HTMLDivElement;
-	let contents: HTMLDivElement;
+	let viewport: HTMLDivElement | undefined = $state();
+	let contents: HTMLDivElement | undefined = $state();
 
 	const httpsWarningBannerDismissed = projectHttpsWarningBannerDismissed(project.id);
 
 	function shouldShowHttpsWarning() {
 		if (httpsWarningBannerDismissed) return false;
-		if (!$baseBranch?.remoteUrl.startsWith('https')) return false;
-		if ($baseBranch?.remoteUrl.includes('github.com') && !!$gitHost) return false;
+		if (!$baseRepo?.protocol?.startsWith('https')) return false;
+		if ($forge?.name === 'github') return false;
 		return true;
 	}
 
-	$: if (shouldShowHttpsWarning()) {
-		showToast({
-			title: 'HTTPS remote detected',
-			message: 'In order to push & fetch, you may need to set up an SSH key.',
-			style: 'neutral'
-		});
-	}
+	$effect(() => {
+		if (shouldShowHttpsWarning()) {
+			showToast({
+				title: 'HTTPS remote detected',
+				message: 'In order to push & fetch, you may need to set up an SSH key.',
+				style: 'neutral'
+			});
+		}
+	});
 
 	const modeService = getContext(ModeService);
 	const mode = modeService.mode;
@@ -42,10 +44,12 @@
 		goto(`/${project.id}/edit`);
 	}
 
-	$: if ($mode?.type === 'Edit') {
-		// That was causing an incorrect linting error when project.id was accessed inside the reactive block
-		gotoEdit();
-	}
+	$effect(() => {
+		if ($mode?.type === 'Edit') {
+			// That was causing an incorrect linting error when project.id was accessed inside the reactive block
+			gotoEdit();
+		}
+	});
 </script>
 
 <div class="board-wrapper">

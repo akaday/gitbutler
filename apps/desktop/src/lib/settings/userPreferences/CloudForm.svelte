@@ -1,36 +1,22 @@
 <script lang="ts">
-	import { Project, ProjectService } from '$lib/backend/projects';
+	import { Project } from '$lib/backend/projects';
 	import AiPromptSelect from '$lib/components/AIPromptSelect.svelte';
 	import SectionCard from '$lib/components/SectionCard.svelte';
 	import WelcomeSigninAction from '$lib/components/WelcomeSigninAction.svelte';
 	import { projectAiGenEnabled } from '$lib/config/config';
 	import Section from '$lib/settings/Section.svelte';
-	import Spacer from '$lib/shared/Spacer.svelte';
-	import Toggle from '$lib/shared/Toggle.svelte';
 	import { UserService } from '$lib/stores/user';
-	import { getContext } from '$lib/utils/context';
+	import { getContext } from '@gitbutler/shared/context';
 	import Button from '@gitbutler/ui/Button.svelte';
-	import { onMount } from 'svelte';
+	import Spacer from '@gitbutler/ui/Spacer.svelte';
+	import Toggle from '@gitbutler/ui/Toggle.svelte';
 	import { goto } from '$app/navigation';
 
 	const userService = getContext(UserService);
-	const projectService = getContext(ProjectService);
 	const project = getContext(Project);
 	const user = userService.user;
 
 	const aiGenEnabled = projectAiGenEnabled(project.id);
-
-	onMount(async () => {
-		if (!project?.api) return;
-		if (!$user) return;
-		const cloudProject = await projectService.getCloudProject(
-			$user.access_token,
-			project.api.repository_id
-		);
-		if (cloudProject === project.api) return;
-		project.api = { ...cloudProject, sync: project.api.sync, sync_code: project.api.sync_code };
-		projectService.updateProject(project);
-	});
 </script>
 
 <Section>
@@ -58,7 +44,7 @@
 				<Toggle
 					id="aiGenEnabled"
 					checked={$aiGenEnabled}
-					on:click={() => {
+					onclick={() => {
 						$aiGenEnabled = !$aiGenEnabled;
 					}}
 				/>

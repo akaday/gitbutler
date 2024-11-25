@@ -3,21 +3,19 @@
 	import FullviewLoading from './FullviewLoading.svelte';
 	import BranchDropzone from '$lib/branch/BranchDropzone.svelte';
 	import BranchLane from '$lib/branch/BranchLane.svelte';
-	import { stackingFeature } from '$lib/config/uiFeatureFlags';
+	import { showHistoryView } from '$lib/config/config';
 	import { cloneElement } from '$lib/dragging/draggable';
-	import { persisted } from '$lib/persisted/persisted';
-	import { getContext } from '$lib/utils/context';
 	import { createKeybind } from '$lib/utils/hotkeys';
 	import { throttle } from '$lib/utils/misc';
 	import { BranchController } from '$lib/vbranches/branchController';
 	import { VirtualBranchService } from '$lib/vbranches/virtualBranch';
+	import { getContext } from '@gitbutler/shared/context';
 	import { flip } from 'svelte/animate';
 
 	const vbranchService = getContext(VirtualBranchService);
 	const branchController = getContext(BranchController);
 	const error = vbranchService.error;
 	const branches = vbranchService.branches;
-	const showHistoryView = persisted(false, 'showHistoryView');
 
 	let dragged: HTMLDivElement | undefined;
 	let dropZone: HTMLDivElement;
@@ -66,22 +64,24 @@
 	}, 200);
 
 	const handleKeyDown = createKeybind({
-		's t a c k': async () => {
-			$stackingFeature = !$stackingFeature;
+		'$mod+Shift+H': () => {
+			$showHistoryView = !$showHistoryView;
+		},
+		'$mod+z': () => {
+			$showHistoryView = !$showHistoryView;
 		}
 	});
 </script>
 
 <svelte:window on:keydown={handleKeyDown} />
 {#if $error}
-	<div data-tauri-drag-region>Something went wrong...</div>
+	<div>Something went wrong...</div>
 {:else if !$branches}
 	<FullviewLoading />
 {:else}
 	<div
 		class="board"
 		role="group"
-		data-tauri-drag-region
 		on:drop={(e) => {
 			e.preventDefault();
 			if (!dragged) {
@@ -90,13 +90,7 @@
 			branchController.updateBranchOrder(sortedBranches.map((b, i) => ({ id: b.id, order: i })));
 		}}
 	>
-		<div
-			role="group"
-			class="branches"
-			data-tauri-drag-region
-			bind:this={dropZone}
-			on:dragover={(e) => handleDragOver(e)}
-		>
+		<div role="group" class="branches" bind:this={dropZone} on:dragover={(e) => handleDragOver(e)}>
 			{#each sortedBranches as branch (branch.id)}
 				<div
 					role="presentation"
@@ -162,6 +156,8 @@
 	.branch {
 		height: 100%;
 		width: fit-content;
+		/* disable lane outline on modal close */
+		outline: none;
 	}
 
 	.draggable-branch {

@@ -13,15 +13,15 @@ use std::{
 use anyhow::{Context, Result};
 use bstr::ByteSlice;
 use git2::TreeEntry;
-use gitbutler_branch::{
-    BranchCreateRequest, BranchOwnershipClaims, BranchUpdateRequest, Target, VirtualBranchesHandle,
-};
+use gitbutler_branch::{BranchCreateRequest, BranchUpdateRequest};
 use gitbutler_branch_actions::{
-    get_applied_status, internal, update_workspace_commit, verify_branch, BranchManagerExt, Get,
+    get_applied_status, internal, list_commit_files, update_workspace_commit, verify_branch,
+    BranchManagerExt, Get,
 };
 use gitbutler_commit::{commit_ext::CommitExt, commit_headers::CommitHeadersV2};
 use gitbutler_reference::{Refname, RemoteRefname};
 use gitbutler_repo::RepositoryExt;
+use gitbutler_stack::{BranchOwnershipClaims, Target, VirtualBranchesHandle};
 use gitbutler_testsupport::{commit_all, virtual_branches::set_test_target, Case, Suite};
 use pretty_assertions::assert_eq;
 
@@ -36,7 +36,7 @@ fn commit_on_branch_then_change_file_then_get_status() -> Result<()> {
     set_test_target(ctx)?;
 
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = ctx
+    let stack1_id = ctx
         .branch_manager()
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
@@ -53,7 +53,7 @@ fn commit_on_branch_then_change_file_then_get_status() -> Result<()> {
     assert_eq!(branch.commits.len(), 0);
 
     // commit
-    internal::commit(ctx, branch1_id, "test commit", None, false)?;
+    internal::commit(ctx, stack1_id, "test commit", None, false)?;
 
     // status (no files)
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
@@ -104,7 +104,7 @@ fn track_binary_files() -> Result<()> {
     set_test_target(ctx)?;
 
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = ctx
+    let stack1_id = ctx
         .branch_manager()
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
@@ -143,7 +143,7 @@ fn track_binary_files() -> Result<()> {
     );
 
     // commit
-    internal::commit(ctx, branch1_id, "test commit", None, false)?;
+    internal::commit(ctx, stack1_id, "test commit", None, false)?;
 
     // status (no files)
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission()).unwrap();
@@ -167,7 +167,7 @@ fn track_binary_files() -> Result<()> {
     file.write_all(&image_data)?;
 
     // commit
-    internal::commit(ctx, branch1_id, "test commit", None, false)?;
+    internal::commit(ctx, stack1_id, "test commit", None, false)?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission()).unwrap();
     let commit_id = &branches[0].commits[0].id;
@@ -201,12 +201,12 @@ fn create_branch_with_ownership() -> Result<()> {
     get_applied_status(ctx, None).expect("failed to get status");
 
     let vb_state = VirtualBranchesHandle::new(ctx.project().gb_dir());
-    let branch0 = vb_state.get_branch_in_workspace(branch0.id).unwrap();
+    let stack0 = vb_state.get_stack_in_workspace(branch0.id).unwrap();
 
     let branch1 = branch_manager
         .create_virtual_branch(
             &BranchCreateRequest {
-                ownership: Some(branch0.ownership),
+                ownership: Some(stack0.ownership),
                 ..Default::default()
             },
             guard.write_permission(),
@@ -223,7 +223,7 @@ fn create_branch_with_ownership() -> Result<()> {
         .collect::<HashMap<_, _>>();
 
     assert_eq!(files_by_branch_id.len(), 2);
-    assert_eq!(files_by_branch_id[&branch0.id].len(), 0);
+    assert_eq!(files_by_branch_id[&stack0.id].len(), 0);
     assert_eq!(files_by_branch_id[&branch1.id].len(), 1);
 
     Ok(())
@@ -260,14 +260,14 @@ fn create_branch_in_the_middle() -> Result<()> {
         .expect("failed to create virtual branch");
 
     let vb_state = VirtualBranchesHandle::new(ctx.project().gb_dir());
-    let mut branches = vb_state
-        .list_branches_in_workspace()
+    let mut stacks = vb_state
+        .list_stacks_in_workspace()
         .expect("failed to read branches");
-    branches.sort_by_key(|b| b.order);
-    assert_eq!(branches.len(), 3);
-    assert_eq!(branches[0].name, "Virtual branch");
-    assert_eq!(branches[1].name, "Virtual branch 2");
-    assert_eq!(branches[2].name, "Virtual branch 1");
+    stacks.sort_by_key(|b| b.order);
+    assert_eq!(stacks.len(), 3);
+    assert_eq!(stacks[0].name, "Lane");
+    assert_eq!(stacks[1].name, "Lane 2");
+    assert_eq!(stacks[2].name, "Lane 1");
 
     Ok(())
 }
@@ -288,13 +288,13 @@ fn create_branch_no_arguments() -> Result<()> {
         .expect("failed to create virtual branch");
 
     let vb_state = VirtualBranchesHandle::new(ctx.project().gb_dir());
-    let branches = vb_state
-        .list_branches_in_workspace()
+    let stacks = vb_state
+        .list_stacks_in_workspace()
         .expect("failed to read branches");
-    assert_eq!(branches.len(), 1);
-    assert_eq!(branches[0].name, "Virtual branch");
-    assert_eq!(branches[0].ownership, BranchOwnershipClaims::default());
-    assert_eq!(branches[0].order, 0);
+    assert_eq!(stacks.len(), 1);
+    assert_eq!(stacks[0].name, "Lane");
+    assert_eq!(stacks[0].ownership, BranchOwnershipClaims::default());
+    assert_eq!(stacks[0].order, 0);
 
     Ok(())
 }
@@ -311,11 +311,11 @@ fn hunk_expantion() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
-    let branch2_id = branch_manager
+    let stack2_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -330,14 +330,14 @@ fn hunk_expantion() -> Result<()> {
         .collect::<HashMap<_, _>>();
 
     assert_eq!(files_by_branch_id.len(), 2);
-    assert_eq!(files_by_branch_id[&branch1_id].len(), 1);
-    assert_eq!(files_by_branch_id[&branch2_id].len(), 0);
+    assert_eq!(files_by_branch_id[&stack1_id].len(), 1);
+    assert_eq!(files_by_branch_id[&stack2_id].len(), 0);
 
     // even though selected branch has changed
     internal::update_branch(
         ctx,
         &BranchUpdateRequest {
-            id: branch1_id,
+            id: stack1_id,
             order: Some(1),
             ..Default::default()
         },
@@ -345,7 +345,7 @@ fn hunk_expantion() -> Result<()> {
     internal::update_branch(
         ctx,
         &BranchUpdateRequest {
-            id: branch2_id,
+            id: stack2_id,
             order: Some(0),
             ..Default::default()
         },
@@ -366,8 +366,8 @@ fn hunk_expantion() -> Result<()> {
         .collect::<HashMap<_, _>>();
 
     assert_eq!(files_by_branch_id.len(), 2);
-    assert_eq!(files_by_branch_id[&branch1_id].len(), 1);
-    assert_eq!(files_by_branch_id[&branch2_id].len(), 0);
+    assert_eq!(files_by_branch_id[&stack1_id].len(), 1);
+    assert_eq!(files_by_branch_id[&stack2_id].len(), 0);
 
     Ok(())
 }
@@ -400,11 +400,11 @@ fn get_status_files_by_branch() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
-    let branch2_id = branch_manager
+    let stack2_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -418,8 +418,8 @@ fn get_status_files_by_branch() -> Result<()> {
         .collect::<HashMap<_, _>>();
 
     assert_eq!(files_by_branch_id.len(), 2);
-    assert_eq!(files_by_branch_id[&branch1_id].len(), 1);
-    assert_eq!(files_by_branch_id[&branch2_id].len(), 0);
+    assert_eq!(files_by_branch_id[&stack1_id].len(), 1);
+    assert_eq!(files_by_branch_id[&stack2_id].len(), 0);
 
     Ok(())
 }
@@ -436,15 +436,15 @@ fn move_hunks_multiple_sources() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
-    let branch2_id = branch_manager
+    let stack2_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
-    let branch3_id = branch_manager
+    let stack3_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -455,16 +455,16 @@ fn move_hunks_multiple_sources() -> Result<()> {
     )?;
 
     let vb_state = VirtualBranchesHandle::new(ctx.project().gb_dir());
-    let mut branch2 = vb_state.get_branch_in_workspace(branch2_id)?;
-    branch2.ownership = BranchOwnershipClaims {
+    let mut stack2 = vb_state.get_stack_in_workspace(stack2_id)?;
+    stack2.ownership = BranchOwnershipClaims {
         claims: vec!["test.txt:1-5".parse()?],
     };
-    vb_state.set_branch(branch2.clone())?;
-    let mut branch1 = vb_state.get_branch_in_workspace(branch1_id)?;
-    branch1.ownership = BranchOwnershipClaims {
+    vb_state.set_stack(stack2.clone())?;
+    let mut stack1 = vb_state.get_stack_in_workspace(stack1_id)?;
+    stack1.ownership = BranchOwnershipClaims {
         claims: vec!["test.txt:11-15".parse()?],
     };
-    vb_state.set_branch(branch1.clone())?;
+    vb_state.set_stack(stack1.clone())?;
 
     let statuses = get_applied_status(ctx, None)
         .expect("failed to get status")
@@ -476,16 +476,16 @@ fn move_hunks_multiple_sources() -> Result<()> {
         .collect::<HashMap<_, _>>();
 
     assert_eq!(files_by_branch_id.len(), 3);
-    assert_eq!(files_by_branch_id[&branch1_id].len(), 1);
-    // assert_eq!(files_by_branch_id[&branch1_id][0].hunks.len(), 1);
-    assert_eq!(files_by_branch_id[&branch2_id].len(), 1);
-    // assert_eq!(files_by_branch_id[&branch2_id][0].hunks.len(), 1);
-    assert_eq!(files_by_branch_id[&branch3_id].len(), 0);
+    assert_eq!(files_by_branch_id[&stack1_id].len(), 1);
+    // assert_eq!(files_by_branch_id[&stack1_id][0].hunks.len(), 1);
+    assert_eq!(files_by_branch_id[&stack2_id].len(), 1);
+    // assert_eq!(files_by_branch_id[&stack2_id][0].hunks.len(), 1);
+    assert_eq!(files_by_branch_id[&stack3_id].len(), 0);
 
     internal::update_branch(
         ctx,
         &BranchUpdateRequest {
-            id: branch3_id,
+            id: stack3_id,
             ownership: Some("test.txt:1-5,11-15".parse()?),
             ..Default::default()
         },
@@ -501,11 +501,11 @@ fn move_hunks_multiple_sources() -> Result<()> {
         .collect::<HashMap<_, _>>();
 
     assert_eq!(files_by_branch_id.len(), 3);
-    assert_eq!(files_by_branch_id[&branch1_id].len(), 0);
-    assert_eq!(files_by_branch_id[&branch2_id].len(), 0);
-    assert_eq!(files_by_branch_id[&branch3_id].len(), 1);
+    assert_eq!(files_by_branch_id[&stack1_id].len(), 0);
+    assert_eq!(files_by_branch_id[&stack2_id].len(), 0);
+    assert_eq!(files_by_branch_id[&stack3_id].len(), 1);
     assert_eq!(
-        files_by_branch_id[&branch3_id]
+        files_by_branch_id[&stack3_id]
             .get(Path::new("test.txt"))
             .unwrap()
             .hunks
@@ -513,7 +513,7 @@ fn move_hunks_multiple_sources() -> Result<()> {
         2
     );
     assert_eq!(
-        files_by_branch_id[&branch3_id]
+        files_by_branch_id[&stack3_id]
             .get(Path::new("test.txt"))
             .unwrap()
             .hunks[0]
@@ -521,7 +521,7 @@ fn move_hunks_multiple_sources() -> Result<()> {
         "@@ -1,3 +1,4 @@\n+line0\n line1\n line2\n line3\n"
     );
     assert_eq!(
-        files_by_branch_id[&branch3_id]
+        files_by_branch_id[&stack3_id]
             .get(Path::new("test.txt"))
             .unwrap()
             .hunks[1]
@@ -552,12 +552,12 @@ fn move_hunks_partial_explicitly() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
 
-    let branch2_id = branch_manager
+    let stack2_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -571,14 +571,14 @@ fn move_hunks_partial_explicitly() -> Result<()> {
         .collect::<HashMap<_, _>>();
 
     assert_eq!(files_by_branch_id.len(), 2);
-    assert_eq!(files_by_branch_id[&branch1_id].len(), 1);
-    // assert_eq!(files_by_branch_id[&branch1_id][0].hunks.len(), 2);
-    assert_eq!(files_by_branch_id[&branch2_id].len(), 0);
+    assert_eq!(files_by_branch_id[&stack1_id].len(), 1);
+    // assert_eq!(files_by_branch_id[&stack1_id][0].hunks.len(), 2);
+    assert_eq!(files_by_branch_id[&stack2_id].len(), 0);
 
     internal::update_branch(
         ctx,
         &BranchUpdateRequest {
-            id: branch2_id,
+            id: stack2_id,
             ownership: Some("test.txt:1-5".parse()?),
             ..Default::default()
         },
@@ -594,9 +594,9 @@ fn move_hunks_partial_explicitly() -> Result<()> {
         .collect::<HashMap<_, _>>();
 
     assert_eq!(files_by_branch_id.len(), 2);
-    assert_eq!(files_by_branch_id[&branch1_id].len(), 1);
+    assert_eq!(files_by_branch_id[&stack1_id].len(), 1);
     assert_eq!(
-        files_by_branch_id[&branch1_id]
+        files_by_branch_id[&stack1_id]
             .get(Path::new("test.txt"))
             .unwrap()
             .hunks
@@ -604,7 +604,7 @@ fn move_hunks_partial_explicitly() -> Result<()> {
         1
     );
     assert_eq!(
-        files_by_branch_id[&branch1_id]
+        files_by_branch_id[&stack1_id]
             .get(Path::new("test.txt"))
             .unwrap()
             .hunks[0]
@@ -612,9 +612,9 @@ fn move_hunks_partial_explicitly() -> Result<()> {
         "@@ -11,3 +12,4 @@ line10\n line11\n line12\n line13\n+line14\n"
     );
 
-    assert_eq!(files_by_branch_id[&branch2_id].len(), 1);
+    assert_eq!(files_by_branch_id[&stack2_id].len(), 1);
     assert_eq!(
-        files_by_branch_id[&branch2_id]
+        files_by_branch_id[&stack2_id]
             .get(Path::new("test.txt"))
             .unwrap()
             .hunks
@@ -622,7 +622,7 @@ fn move_hunks_partial_explicitly() -> Result<()> {
         1
     );
     assert_eq!(
-        files_by_branch_id[&branch2_id]
+        files_by_branch_id[&stack2_id]
             .get(Path::new("test.txt"))
             .unwrap()
             .hunks[0]
@@ -845,8 +845,7 @@ fn merge_vbranch_upstream_clean_rebase() -> Result<()> {
         .expect("failed to create virtual branch");
 
     branch.upstream = Some(remote_branch.clone());
-    branch.head = last_push;
-    vb_state.set_branch(branch.clone())?;
+    branch.set_stack_head(ctx, last_push, None)?;
 
     // create the branch
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
@@ -869,18 +868,20 @@ fn merge_vbranch_upstream_clean_rebase() -> Result<()> {
         1,
         "test.txt is commited inside this commit"
     );
-    assert_eq!(branch1.commits[0].files.len(), 1);
+    let commit1_files = list_commit_files(project, branch1.commits[0].id)?;
+    assert_eq!(commit1_files.len(), 1);
+    assert_eq!(commit1_files[0].path.to_str().unwrap(), "test.txt");
     assert_eq!(
-        branch1.commits[0].files[0].path.to_str().unwrap(),
-        "test.txt"
-    );
-    assert_eq!(
-        branch1.commits[0].files[0].hunks[0].diff.to_str().unwrap(),
+        commit1_files[0].hunks[0].diff_lines.to_str().unwrap(),
         "@@ -2,3 +2,4 @@ line1\n line2\n line3\n line4\n+upstream\n"
     );
     // assert_eq!(branch1.upstream.as_ref().unwrap().commits.len(), 1);
 
-    internal::integrate_upstream_commits(ctx, branch1.id)?;
+    internal::branch_upstream_integration::integrate_upstream_commits(
+        ctx,
+        branch1.id,
+        guard.write_permission(),
+    )?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
     let branch1 = &branches[0];
@@ -970,8 +971,7 @@ fn merge_vbranch_upstream_conflict() -> Result<()> {
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch");
     branch.upstream = Some(remote_branch.clone());
-    branch.head = last_push;
-    vb_state.set_branch(branch.clone())?;
+    branch.set_stack_head(ctx, last_push, None)?;
 
     internal::update_branch(
         ctx,
@@ -991,45 +991,26 @@ fn merge_vbranch_upstream_conflict() -> Result<()> {
     assert_eq!(branch1.commits.len(), 1);
     // assert_eq!(branch1.upstream.as_ref().unwrap().commits.len(), 1);
 
-    internal::integrate_upstream_commits(ctx, branch1.id)?;
+    internal::branch_upstream_integration::integrate_upstream_commits(
+        ctx,
+        branch1.id,
+        guard.write_permission(),
+    )?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
     let branch1 = &branches[0];
     let contents = std::fs::read(Path::new(&project.path).join(file_path))?;
 
     assert_eq!(
-        "line1\nline2\nline3\nline4\nupstream\n<<<<<<< ours\nother side\n=======\ncoworker work\n>>>>>>> theirs\n",
+        "line1\nline2\nline3\nline4\nupstream\ncoworker work\n",
         String::from_utf8(contents)?
     );
 
-    assert_eq!(branch1.files.len(), 1);
-    assert_eq!(branch1.commits.len(), 1);
-    assert!(branch1.conflicted);
-
-    // fix the conflict
-    std::fs::write(
-        Path::new(&project.path).join(file_path),
-        "line1\nline2\nline3\nline4\nupstream\nother side\ncoworker work\n",
-    )?;
-
-    // make gb see the conflict resolution
-    update_workspace_commit(&vb_state, ctx)?;
-    let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    assert!(branches[0].conflicted);
-
-    // commit the merge resolution
-    internal::commit(ctx, branch1.id, "fix merge conflict", None, false)?;
-
-    let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch1 = &branches[0];
-    assert!(!branch1.conflicted);
     assert_eq!(branch1.files.len(), 0);
-    assert_eq!(branch1.commits.len(), 3);
-
-    // make sure the last commit was a merge commit (2 parents)
-    let last_id = &branch1.commits[0].id;
-    let last_commit = ctx.repository().find_commit(last_id.to_owned())?;
-    assert_eq!(last_commit.parent_count(), 2);
+    assert_eq!(branch1.commits.len(), 3); // Local commits including the merge commit
+    assert_eq!(branch1.series[0].clone().unwrap().patches.len(), 3);
+    assert_eq!(branch1.series[0].clone().unwrap().upstream_patches.len(), 0);
+    assert!(!branch1.conflicted);
 
     Ok(())
 }
@@ -1069,6 +1050,7 @@ fn unapply_ownership_partial() -> Result<()> {
     internal::unapply_ownership(
         ctx,
         &"test.txt:2-6".parse().unwrap(),
+        None,
         guard.write_permission(),
     )
     .unwrap();
@@ -1109,11 +1091,11 @@ fn unapply_branch() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
-    let branch2_id = branch_manager
+    let stack2_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -1121,7 +1103,7 @@ fn unapply_branch() -> Result<()> {
     internal::update_branch(
         ctx,
         &BranchUpdateRequest {
-            id: branch2_id,
+            id: stack2_id,
             ownership: Some("test2.txt:1-3".parse()?),
             ..Default::default()
         },
@@ -1136,12 +1118,12 @@ fn unapply_branch() -> Result<()> {
     assert_eq!("line5\nline6\n", String::from_utf8(contents)?);
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch = &branches.iter().find(|b| b.id == stack1_id).unwrap();
     assert_eq!(branch.files.len(), 1);
     assert!(branch.active);
 
     let branch_manager = ctx.branch_manager();
-    let real_branch = branch_manager.save_and_unapply(branch1_id, guard.write_permission())?;
+    let real_branch = branch_manager.save_and_unapply(stack1_id, guard.write_permission())?;
 
     let contents = std::fs::read(Path::new(&project.path).join(file_path))?;
     assert_eq!("line1\nline2\nline3\nline4\n", String::from_utf8(contents)?);
@@ -1149,11 +1131,12 @@ fn unapply_branch() -> Result<()> {
     assert_eq!("line5\nline6\n", String::from_utf8(contents)?);
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    assert!(!branches.iter().any(|b| b.id == branch1_id));
+    assert!(!branches.iter().any(|b| b.id == stack1_id));
 
     let branch_manager = ctx.branch_manager();
-    let branch1_id = branch_manager.create_virtual_branch_from_branch(
+    let stack1_id = branch_manager.create_virtual_branch_from_branch(
         &Refname::from_str(&real_branch)?,
+        None,
         None,
         guard.write_permission(),
     )?;
@@ -1166,7 +1149,7 @@ fn unapply_branch() -> Result<()> {
     assert_eq!("line5\nline6\n", String::from_utf8(contents)?);
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch = &branches.iter().find(|b| b.id == stack1_id).unwrap();
     assert_eq!(branch.files.len(), 1);
     assert!(branch.active);
 
@@ -1194,11 +1177,11 @@ fn apply_unapply_added_deleted_files() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch2_id = branch_manager
+    let stack2_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
-    let branch3_id = branch_manager
+    let stack3_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -1206,7 +1189,7 @@ fn apply_unapply_added_deleted_files() -> Result<()> {
     internal::update_branch(
         ctx,
         &BranchUpdateRequest {
-            id: branch2_id,
+            id: stack2_id,
             ownership: Some("test2.txt:0-0".parse()?),
             ..Default::default()
         },
@@ -1214,7 +1197,7 @@ fn apply_unapply_added_deleted_files() -> Result<()> {
     internal::update_branch(
         ctx,
         &BranchUpdateRequest {
-            id: branch3_id,
+            id: stack3_id,
             ownership: Some("test3.txt:1-2".parse()?),
             ..Default::default()
         },
@@ -1223,19 +1206,20 @@ fn apply_unapply_added_deleted_files() -> Result<()> {
     internal::list_virtual_branches(ctx, guard.write_permission()).unwrap();
 
     let branch_manager = ctx.branch_manager();
-    let real_branch_2 = branch_manager.save_and_unapply(branch2_id, guard.write_permission())?;
+    let real_branch_2 = branch_manager.save_and_unapply(stack2_id, guard.write_permission())?;
 
     // check that file2 is back
     let contents = std::fs::read(Path::new(&project.path).join(file_path2))?;
     assert_eq!("file2\n", String::from_utf8(contents)?);
 
-    let real_branch_3 = branch_manager.save_and_unapply(branch3_id, guard.write_permission())?;
+    let real_branch_3 = branch_manager.save_and_unapply(stack3_id, guard.write_permission())?;
     // check that file3 is gone
     assert!(!Path::new(&project.path).join(file_path3).exists());
 
     branch_manager
         .create_virtual_branch_from_branch(
             &Refname::from_str(&real_branch_2).unwrap(),
+            None,
             None,
             guard.write_permission(),
         )
@@ -1247,6 +1231,7 @@ fn apply_unapply_added_deleted_files() -> Result<()> {
     branch_manager
         .create_virtual_branch_from_branch(
             &Refname::from_str(&real_branch_3).unwrap(),
+            None,
             None,
             guard.write_permission(),
         )
@@ -1284,11 +1269,11 @@ fn detect_mergeable_branch() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
-    let branch2_id = branch_manager
+    let stack2_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -1296,7 +1281,7 @@ fn detect_mergeable_branch() -> Result<()> {
     internal::update_branch(
         ctx,
         &BranchUpdateRequest {
-            id: branch2_id,
+            id: stack2_id,
             ownership: Some("test4.txt:1-3".parse()?),
             ..Default::default()
         },
@@ -1305,8 +1290,8 @@ fn detect_mergeable_branch() -> Result<()> {
 
     // unapply both branches and create some conflicting ones
     let branch_manager = ctx.branch_manager();
-    branch_manager.save_and_unapply(branch1_id, guard.write_permission())?;
-    branch_manager.save_and_unapply(branch2_id, guard.write_permission())?;
+    branch_manager.save_and_unapply(stack1_id, guard.write_permission())?;
+    branch_manager.save_and_unapply(stack2_id, guard.write_permission())?;
 
     ctx.repository().set_head("refs/heads/master")?;
     ctx.repository()
@@ -1354,7 +1339,7 @@ fn detect_mergeable_branch() -> Result<()> {
     branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch");
-    let branch4_id = branch_manager
+    let stack4_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -1374,35 +1359,23 @@ fn detect_mergeable_branch() -> Result<()> {
 
     let vb_state = VirtualBranchesHandle::new(project.gb_dir());
 
-    let mut branch4 = vb_state.get_branch_in_workspace(branch4_id)?;
-    branch4.ownership = BranchOwnershipClaims {
+    let mut stack4 = vb_state.get_stack_in_workspace(stack4_id)?;
+    stack4.ownership = BranchOwnershipClaims {
         claims: vec!["test2.txt:1-6".parse()?],
     };
-    vb_state.set_branch(branch4.clone())?;
+    vb_state.set_stack(stack4.clone())?;
 
-    let remotes = gitbutler_branch_actions::internal::list_local_branches(ctx)
-        .expect("failed to list remotes");
-    let _remote1 = &remotes
-        .iter()
-        .find(|b| b.name.to_string() == "refs/remotes/origin/remote_branch")
-        .unwrap();
     assert!(!internal::is_remote_branch_mergeable(
         ctx,
         &"refs/remotes/origin/remote_branch".parse().unwrap()
     )
     .unwrap());
-    // assert_eq!(remote1.commits.len(), 1);
 
-    let _remote2 = &remotes
-        .iter()
-        .find(|b| b.name.to_string() == "refs/remotes/origin/remote_branch2")
-        .unwrap();
     assert!(internal::is_remote_branch_mergeable(
         ctx,
         &"refs/remotes/origin/remote_branch2".parse().unwrap()
     )
     .unwrap());
-    // assert_eq!(remote2.commits.len(), 2);
 
     Ok(())
 }
@@ -1450,15 +1423,15 @@ fn upstream_integrated_vbranch() -> Result<()> {
     // create vbranches, one integrated, one not
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
-    let branch2_id = branch_manager
+    let stack2_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
-    let branch3_id = branch_manager
+    let stack3_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -1476,7 +1449,7 @@ fn upstream_integrated_vbranch() -> Result<()> {
     internal::update_branch(
         ctx,
         &BranchUpdateRequest {
-            id: branch1_id,
+            id: stack1_id,
             name: Some("integrated".to_string()),
             ownership: Some("test.txt:1-2".parse()?),
             ..Default::default()
@@ -1486,7 +1459,7 @@ fn upstream_integrated_vbranch() -> Result<()> {
     internal::update_branch(
         ctx,
         &BranchUpdateRequest {
-            id: branch2_id,
+            id: stack2_id,
             name: Some("not integrated".to_string()),
             ownership: Some("test2.txt:1-2".parse()?),
             ..Default::default()
@@ -1496,7 +1469,7 @@ fn upstream_integrated_vbranch() -> Result<()> {
     internal::update_branch(
         ctx,
         &BranchUpdateRequest {
-            id: branch3_id,
+            id: stack3_id,
             name: Some("not committed".to_string()),
             ownership: Some("test3.txt:1-2".parse()?),
             ..Default::default()
@@ -1504,22 +1477,22 @@ fn upstream_integrated_vbranch() -> Result<()> {
     )?;
 
     // create a new virtual branch from the remote branch
-    internal::commit(ctx, branch1_id, "integrated commit", None, false)?;
-    internal::commit(ctx, branch2_id, "non-integrated commit", None, false)?;
+    internal::commit(ctx, stack1_id, "integrated commit", None, false)?;
+    internal::commit(ctx, stack2_id, "non-integrated commit", None, false)?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
 
-    let branch1 = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch1 = &branches.iter().find(|b| b.id == stack1_id).unwrap();
     assert!(branch1.commits.iter().any(|c| c.is_integrated));
     assert_eq!(branch1.files.len(), 0);
     assert_eq!(branch1.commits.len(), 1);
 
-    let branch2 = &branches.iter().find(|b| b.id == branch2_id).unwrap();
+    let branch2 = &branches.iter().find(|b| b.id == stack2_id).unwrap();
     assert!(!branch2.commits.iter().any(|c| c.is_integrated));
     assert_eq!(branch2.files.len(), 0);
     assert_eq!(branch2.commits.len(), 1);
 
-    let branch3 = &branches.iter().find(|b| b.id == branch3_id).unwrap();
+    let branch3 = &branches.iter().find(|b| b.id == stack3_id).unwrap();
     assert!(!branch3.commits.iter().any(|c| c.is_integrated));
     assert_eq!(branch3.files.len(), 1);
     assert_eq!(branch3.commits.len(), 0);
@@ -1543,7 +1516,7 @@ fn commit_same_hunk_twice() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -1554,24 +1527,26 @@ fn commit_same_hunk_twice() -> Result<()> {
     )?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch = &branches.iter().find(|b| b.id == stack1_id).unwrap();
 
     assert_eq!(branch.files.len(), 1);
     assert_eq!(branch.files[0].hunks.len(), 1);
     assert_eq!(branch.commits.len(), 0);
 
     // commit
-    internal::commit(ctx, branch1_id, "first commit to test.txt", None, false)?;
+    internal::commit(ctx, stack1_id, "first commit to test.txt", None, false)?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch = &branches.iter().find(|b| b.id == stack1_id).unwrap();
 
     assert_eq!(branch.files.len(), 0, "no files expected");
 
     assert_eq!(branch.commits.len(), 1, "file should have been commited");
-    assert_eq!(branch.commits[0].files.len(), 1, "hunks expected");
+
+    let commit1_files = list_commit_files(project, branch.commits[0].id)?;
+    assert_eq!(commit1_files.len(), 1, "hunks expected");
     assert_eq!(
-        branch.commits[0].files[0].hunks.len(),
+        commit1_files[0].hunks.len(),
         1,
         "one hunk should have been commited"
     );
@@ -1584,15 +1559,15 @@ fn commit_same_hunk_twice() -> Result<()> {
     )?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch = &branches.iter().find(|b| b.id == stack1_id).unwrap();
 
     assert_eq!(branch.files.len(), 1, "one file should be changed");
     assert_eq!(branch.commits.len(), 1, "commit is still there");
 
-    internal::commit(ctx, branch1_id, "second commit to test.txt", None, false)?;
+    internal::commit(ctx, stack1_id, "second commit to test.txt", None, false)?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch = &branches.iter().find(|b| b.id == stack1_id).unwrap();
 
     assert_eq!(
         branch.files.len(),
@@ -1600,11 +1575,13 @@ fn commit_same_hunk_twice() -> Result<()> {
         "all changes should have been commited"
     );
 
+    let commit1_files = list_commit_files(project, branch.commits[0].id)?;
+    let commit2_files = list_commit_files(project, branch.commits[1].id)?;
     assert_eq!(branch.commits.len(), 2, "two commits expected");
-    assert_eq!(branch.commits[0].files.len(), 1);
-    assert_eq!(branch.commits[0].files[0].hunks.len(), 1);
-    assert_eq!(branch.commits[1].files.len(), 1);
-    assert_eq!(branch.commits[1].files[0].hunks.len(), 1);
+    assert_eq!(commit1_files.len(), 1);
+    assert_eq!(commit1_files[0].hunks.len(), 1);
+    assert_eq!(commit2_files.len(), 1);
+    assert_eq!(commit2_files[0].hunks.len(), 1);
 
     Ok(())
 }
@@ -1625,7 +1602,7 @@ fn commit_same_file_twice() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -1636,24 +1613,25 @@ fn commit_same_file_twice() -> Result<()> {
     )?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch = &branches.iter().find(|b| b.id == stack1_id).unwrap();
 
     assert_eq!(branch.files.len(), 1);
     assert_eq!(branch.files[0].hunks.len(), 1);
     assert_eq!(branch.commits.len(), 0);
 
     // commit
-    internal::commit(ctx, branch1_id, "first commit to test.txt", None, false)?;
+    internal::commit(ctx, stack1_id, "first commit to test.txt", None, false)?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch = &branches.iter().find(|b| b.id == stack1_id).unwrap();
 
     assert_eq!(branch.files.len(), 0, "no files expected");
 
+    let commit1_files = list_commit_files(project, branch.commits[0].id)?;
     assert_eq!(branch.commits.len(), 1, "file should have been commited");
-    assert_eq!(branch.commits[0].files.len(), 1, "hunks expected");
+    assert_eq!(commit1_files.len(), 1, "hunks expected");
     assert_eq!(
-        branch.commits[0].files[0].hunks.len(),
+        commit1_files[0].hunks.len(),
         1,
         "one hunk should have been commited"
     );
@@ -1666,15 +1644,15 @@ fn commit_same_file_twice() -> Result<()> {
     )?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch = &branches.iter().find(|b| b.id == stack1_id).unwrap();
 
     assert_eq!(branch.files.len(), 1, "one file should be changed");
     assert_eq!(branch.commits.len(), 1, "commit is still there");
 
-    internal::commit(ctx, branch1_id, "second commit to test.txt", None, false)?;
+    internal::commit(ctx, stack1_id, "second commit to test.txt", None, false)?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch = &branches.iter().find(|b| b.id == stack1_id).unwrap();
 
     assert_eq!(
         branch.files.len(),
@@ -1682,11 +1660,13 @@ fn commit_same_file_twice() -> Result<()> {
         "all changes should have been commited"
     );
 
+    let commit1_files = list_commit_files(project, branch.commits[0].id)?;
+    let commit2_files = list_commit_files(project, branch.commits[1].id)?;
     assert_eq!(branch.commits.len(), 2, "two commits expected");
-    assert_eq!(branch.commits[0].files.len(), 1);
-    assert_eq!(branch.commits[0].files[0].hunks.len(), 1);
-    assert_eq!(branch.commits[1].files.len(), 1);
-    assert_eq!(branch.commits[1].files[0].hunks.len(), 1);
+    assert_eq!(commit1_files.len(), 1);
+    assert_eq!(commit1_files[0].hunks.len(), 1);
+    assert_eq!(commit2_files.len(), 1);
+    assert_eq!(commit2_files[0].hunks.len(), 1);
 
     Ok(())
 }
@@ -1707,7 +1687,7 @@ fn commit_partial_by_hunk() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -1718,7 +1698,7 @@ fn commit_partial_by_hunk() -> Result<()> {
     )?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch = &branches.iter().find(|b| b.id == stack1_id).unwrap();
 
     assert_eq!(branch.files.len(), 1);
     assert_eq!(branch.files[0].hunks.len(), 2);
@@ -1727,38 +1707,41 @@ fn commit_partial_by_hunk() -> Result<()> {
     // commit
     internal::commit(
         ctx,
-        branch1_id,
+        stack1_id,
         "first commit to test.txt",
         Some(&"test.txt:1-6".parse::<BranchOwnershipClaims>().unwrap()),
         false,
     )?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch = &branches.iter().find(|b| b.id == stack1_id).unwrap();
+    let commit1_files = list_commit_files(project, branch.commits[0].id)?;
 
     assert_eq!(branch.files.len(), 1);
     assert_eq!(branch.files[0].hunks.len(), 1);
     assert_eq!(branch.commits.len(), 1);
-    assert_eq!(branch.commits[0].files.len(), 1);
-    assert_eq!(branch.commits[0].files[0].hunks.len(), 1);
+    assert_eq!(commit1_files.len(), 1);
+    assert_eq!(commit1_files[0].hunks.len(), 1);
 
     internal::commit(
         ctx,
-        branch1_id,
+        stack1_id,
         "second commit to test.txt",
         Some(&"test.txt:16-22".parse::<BranchOwnershipClaims>().unwrap()),
         false,
     )?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch = &branches.iter().find(|b| b.id == stack1_id).unwrap();
+    let commit1_files = list_commit_files(project, branch.commits[0].id)?;
+    let commit2_files = list_commit_files(project, branch.commits[1].id)?;
 
     assert_eq!(branch.files.len(), 0);
     assert_eq!(branch.commits.len(), 2);
-    assert_eq!(branch.commits[0].files.len(), 1);
-    assert_eq!(branch.commits[0].files[0].hunks.len(), 1);
-    assert_eq!(branch.commits[1].files.len(), 1);
-    assert_eq!(branch.commits[1].files[0].hunks.len(), 1);
+    assert_eq!(commit1_files.len(), 1);
+    assert_eq!(commit1_files[0].hunks.len(), 1);
+    assert_eq!(commit2_files.len(), 1);
+    assert_eq!(commit2_files[0].hunks.len(), 1);
 
     Ok(())
 }
@@ -1784,16 +1767,16 @@ fn commit_partial_by_file() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
 
     // commit
-    internal::commit(ctx, branch1_id, "branch1 commit", None, false)?;
+    internal::commit(ctx, stack1_id, "branch1 commit", None, false)?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch1 = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch1 = &branches.iter().find(|b| b.id == stack1_id).unwrap();
 
     // branch one test.txt has just the 1st and 3rd hunks applied
     let commit2 = &branch1.commits[0].id;
@@ -1835,16 +1818,16 @@ fn commit_add_and_delete_files() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
 
     // commit
-    internal::commit(ctx, branch1_id, "branch1 commit", None, false)?;
+    internal::commit(ctx, stack1_id, "branch1 commit", None, false)?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch1 = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch1 = &branches.iter().find(|b| b.id == stack1_id).unwrap();
 
     // branch one test.txt has just the 1st and 3rd hunks applied
     let commit2 = &branch1.commits[0].id;
@@ -1892,16 +1875,16 @@ fn commit_executable_and_symlinks() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
 
     // commit
-    internal::commit(ctx, branch1_id, "branch1 commit", None, false)?;
+    internal::commit(ctx, stack1_id, "branch1 commit", None, false)?;
 
     let (branches, _) = internal::list_virtual_branches(ctx, guard.write_permission())?;
-    let branch1 = &branches.iter().find(|b| b.id == branch1_id).unwrap();
+    let branch1 = &branches.iter().find(|b| b.id == stack1_id).unwrap();
 
     let commit = &branch1.commits[0].id;
     let commit = ctx
@@ -2040,7 +2023,7 @@ fn pre_commit_hook_rejection() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -2057,7 +2040,7 @@ fn pre_commit_hook_rejection() -> Result<()> {
 
     git2_hooks::create_hook(ctx.repository(), git2_hooks::HOOK_PRE_COMMIT, hook);
 
-    let res = internal::commit(ctx, branch1_id, "test commit", None, true);
+    let res = internal::commit(ctx, stack1_id, "test commit", None, true);
 
     let err = res.unwrap_err();
     assert_eq!(
@@ -2080,7 +2063,7 @@ fn post_commit_hook() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -2100,7 +2083,7 @@ fn post_commit_hook() -> Result<()> {
 
     assert!(!hook_ran_proof.exists());
 
-    internal::commit(ctx, branch1_id, "test commit", None, true)?;
+    internal::commit(ctx, stack1_id, "test commit", None, true)?;
 
     assert!(hook_ran_proof.exists());
 
@@ -2119,7 +2102,7 @@ fn commit_msg_hook_rejection() -> Result<()> {
 
     let branch_manager = ctx.branch_manager();
     let mut guard = project.exclusive_worktree_access();
-    let branch1_id = branch_manager
+    let stack1_id = branch_manager
         .create_virtual_branch(&BranchCreateRequest::default(), guard.write_permission())
         .expect("failed to create virtual branch")
         .id;
@@ -2136,7 +2119,7 @@ fn commit_msg_hook_rejection() -> Result<()> {
 
     git2_hooks::create_hook(ctx.repository(), git2_hooks::HOOK_COMMIT_MSG, hook);
 
-    let res = internal::commit(ctx, branch1_id, "test commit", None, true);
+    let res = internal::commit(ctx, stack1_id, "test commit", None, true);
 
     let err = res.unwrap_err();
     assert_eq!(

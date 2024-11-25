@@ -1,4 +1,6 @@
 <script lang="ts" module>
+	type T = string;
+
 	export type SelectItem<T extends string = string> = {
 		label: string;
 		value: T;
@@ -9,10 +11,12 @@
 <script lang="ts" generics="T extends string">
 	import OptionsGroup from './OptionsGroup.svelte';
 	import SearchItem from './SearchItem.svelte';
-	import TextBox from '../shared/TextBox.svelte';
 	import ScrollableContainer from '$lib/scroll/ScrollableContainer.svelte';
 	import { KeyName } from '$lib/utils/hotkeys';
-	import { resizeObserver } from '$lib/utils/resizeObserver';
+	import Textbox from '@gitbutler/ui/Textbox.svelte';
+	import { portal } from '@gitbutler/ui/utils/portal';
+	import { pxToRem } from '@gitbutler/ui/utils/pxToRem';
+	import { resizeObserver } from '@gitbutler/ui/utils/resizeObserver';
 	import { type Snippet } from 'svelte';
 
 	interface SelectProps {
@@ -21,12 +25,16 @@
 		disabled?: boolean;
 		loading?: boolean;
 		wide?: boolean;
+		flex?: string;
 		options: SelectItem<T>[];
 		value?: T;
 		placeholder?: string;
 		maxHeight?: number;
 		searchable?: boolean;
-		itemSnippet: Snippet<[{ item: SelectItem<T>; highlighted: boolean }]>;
+		customWidth?: number;
+		popupAlign?: 'left' | 'right';
+		customSelectButton?: Snippet;
+		itemSnippet: Snippet<[{ item: SelectItem<T>; highlighted: boolean; idx: number }]>;
 		children?: Snippet;
 		onselect?: (value: T) => void;
 	}
@@ -37,11 +45,15 @@
 		disabled,
 		loading,
 		wide,
+		flex,
 		options = [],
 		value,
-		placeholder,
+		placeholder = 'Select an option...',
 		maxHeight,
 		searchable,
+		customWidth,
+		popupAlign = 'left',
+		customSelectButton,
 		itemSnippet,
 		children,
 		onselect
@@ -123,14 +135,14 @@
 		}
 	}
 
-	function handleKeyDown(e: CustomEvent<KeyboardEvent>) {
+	function handleKeyDown(e: KeyboardEvent) {
 		if (!listOpen) {
 			return;
 		}
-		e.detail.stopPropagation();
-		e.detail.preventDefault();
+		e.stopPropagation();
+		e.preventDefault();
 
-		const { key } = e.detail;
+		const { key } = e;
 
 		switch (key) {
 			case KeyName.Escape:
@@ -149,28 +161,35 @@
 	}
 </script>
 
-<div class="select-wrapper" class:wide bind:this={selectWrapperEl}>
+<div class="select-wrapper" class:wide bind:this={selectWrapperEl} style:flex>
 	{#if label}
 		<label for={id} class="select__label text-13 text-body text-semibold">{label}</label>
 	{/if}
-	<TextBox
-		{id}
-		{placeholder}
-		noselect
-		readonly
-		type="select"
-		reversedDirection
-		icon="select-chevron"
-		value={options.find((item) => item.value === value)?.label || 'Select an option...'}
-		disabled={disabled || loading}
-		on:mousedown={toggleList}
-		on:keydown={(ev) => handleKeyDown(ev)}
-	/>
+	{#if customSelectButton}
+		<button type="button" onmousedown={toggleList} onkeydown={(ev) => handleKeyDown(ev)}>
+			{@render customSelectButton()}
+		</button>
+	{:else}
+		<Textbox
+			{id}
+			{placeholder}
+			noselect
+			readonly
+			type="select"
+			reversedDirection
+			icon="select-chevron"
+			value={options.find((item) => item.value === value)?.label}
+			disabled={disabled || loading}
+			onmousedown={toggleList}
+			onkeydown={(ev) => handleKeyDown(ev)}
+		/>
+	{/if}
 	{#if listOpen}
 		<div
 			role="presentation"
 			class="overlay-wrapper"
 			onclick={clickOutside}
+			use:portal={'body'}
 			use:resizeObserver={() => {
 				getInputBoundingRect();
 				setMaxHeight();
@@ -178,11 +197,17 @@
 		>
 			<div
 				class="options card"
-				style:width="{inputBoundingRect?.width}px"
+				style:width={customWidth ? 'fit-content' : `${inputBoundingRect?.width}px`}
+				style:max-width={customWidth && pxToRem(customWidth)}
 				style:top={inputBoundingRect?.top
 					? `${inputBoundingRect.top + inputBoundingRect.height}px`
 					: undefined}
-				style:left={inputBoundingRect?.left ? `${inputBoundingRect.left}px` : undefined}
+				style:left={inputBoundingRect?.left && popupAlign === 'left'
+					? `${inputBoundingRect.left}px`
+					: undefined}
+				style:right={inputBoundingRect?.right && popupAlign === 'right'
+					? `${window.innerWidth - inputBoundingRect.right}px`
+					: undefined}
 				style:max-height={maxHeightState && `${maxHeightState}px`}
 			>
 				<ScrollableContainer initiallyVisible>
@@ -197,7 +222,7 @@
 						{/if}
 						{#each filteredOptions as item, idx}
 							<div class="option" tabindex="-1" role="none" onmousedown={() => handleSelect(item)}>
-								{@render itemSnippet({ item, highlighted: idx === highlightedIndex })}
+								{@render itemSnippet({ item, highlighted: idx === highlightedIndex, idx })}
 							</div>
 						{/each}
 					</OptionsGroup>
@@ -217,6 +242,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
+		height: fit-content;
 	}
 
 	.select__label {
@@ -231,7 +257,7 @@
 		left: 0;
 		width: 100%;
 		height: 100%;
-		/* background-color: rgba(0, 0, 0, 0.1); */
+		/* background-color: rgba(0, 0, 0, 0.1);  */
 	}
 
 	.options {

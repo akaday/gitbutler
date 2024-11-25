@@ -94,7 +94,7 @@
 	<div>{project.name}</div>
 	<div class="columns">
 		<div class="column">
-			<h2>Patch Stacks</h2>
+			<h2>Branches</h2>
 			{#each patchStacks as stack}
 				<div>
 					{stack.title}<br />
@@ -121,7 +121,7 @@
 						{#each Object.keys(event.files) as branch}
 							{#if event.branch_data.branches[branch]}
 								<h3>Branch {event.branch_data.branches[branch].name}</h3>
-								<button on:click={() => createPatchStack(branch, event.sha)}
+								<button type="button" on:click={() => createPatchStack(branch, event.sha)}
 									>Create Patch Stack</button
 								>
 								{#each Object.keys(event.files[branch]) as file}

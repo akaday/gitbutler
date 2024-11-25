@@ -1,91 +1,60 @@
 <script lang="ts">
 	import BranchPreviewHeader from '../branch/BranchPreviewHeader.svelte';
 	import Resizer from '../shared/Resizer.svelte';
-	import { Project } from '$lib/backend/projects';
 	import CommitCard from '$lib/commit/CommitCard.svelte';
 	import { transformAnyCommit } from '$lib/commitLines/transformers';
 	import Markdown from '$lib/components/Markdown.svelte';
 	import FileCard from '$lib/file/FileCard.svelte';
-	import { getGitHost } from '$lib/gitHost/interface/gitHost';
+	import { getForge } from '$lib/forge/interface/forge';
 	import ScrollableContainer from '$lib/scroll/ScrollableContainer.svelte';
 	import { SETTINGS, type Settings } from '$lib/settings/userSettings';
-	import { RemoteBranchService } from '$lib/stores/remoteBranches';
-	import { getContext, getContextStoreBySymbol } from '$lib/utils/context';
 	import { FileIdSelection } from '$lib/vbranches/fileIdSelection';
-	import { BranchData, type Branch } from '$lib/vbranches/types';
-	import LineGroup from '@gitbutler/ui/commitLines/LineGroup.svelte';
+	import { BranchData } from '$lib/vbranches/types';
+	import { getContext, getContextStoreBySymbol } from '@gitbutler/shared/context';
+	import Line from '@gitbutler/ui/commitLines/Line.svelte';
 	import { LineManagerFactory } from '@gitbutler/ui/commitLines/lineManager';
 	import lscache from 'lscache';
 	import { onMount, setContext } from 'svelte';
-	import { writable } from 'svelte/store';
-	import type { PullRequest } from '$lib/gitHost/interface/types';
+	import type { PullRequest } from '$lib/forge/interface/types';
 
-	export let localBranch: Branch | undefined = undefined;
-	export let remoteBranch: Branch | undefined = undefined;
+	export let localBranch: BranchData | undefined = undefined;
+	export let remoteBranch: BranchData | undefined = undefined;
 	export let pr: PullRequest | undefined;
 
-	const project = getContext(Project);
-	const remoteBranchService = getContext(RemoteBranchService);
-	const gitHost = getGitHost();
+	const forge = getForge();
 
-	const fileIdSelection = new FileIdSelection(project.id, writable([]));
+	const fileIdSelection = new FileIdSelection();
 	setContext(FileIdSelection, fileIdSelection);
 
 	const selectedFile = fileIdSelection.selectedFile;
-	$: commitId = $selectedFile?.[0];
-	$: selected = $selectedFile?.[1];
+	$: commitId = $selectedFile?.commitId;
+	$: selected = $selectedFile?.file;
 
 	const defaultBranchWidthRem = 30;
 	const laneWidthKey = 'branchPreviewLaneWidth';
 	const userSettings = getContextStoreBySymbol<Settings>(SETTINGS);
 	const lineManagerFactory = getContext(LineManagerFactory);
 
-	let localBranchData: BranchData | undefined;
-	let remoteBranchData: BranchData | undefined;
-
-	// The remote branch service (which needs to be renamed) is responsible for
-	// fetching local and remote branches.
-	// We must manually set the branch data to undefined as the component
-	// doesn't get completely re-rendered on a page change.
-	$: if (localBranch) {
-		remoteBranchService
-			.getRemoteBranchData(localBranch.name)
-			.then((branchData) => (localBranchData = branchData));
-	} else {
-		localBranchData = undefined;
-	}
-
-	$: if (remoteBranch) {
-		remoteBranchService
-			.getRemoteBranchData(remoteBranch.name)
-			.then((branchData) => (remoteBranchData = branchData));
-	} else {
-		remoteBranchData = undefined;
-	}
-
-	$: remoteCommitShas = new Set(remoteBranchData?.commits.map((commit) => commit.id) || []);
+	$: remoteCommitShas = new Set(remoteBranch?.commits.map((commit) => commit.id) || []);
 
 	// Find commits common in the local and remote
 	$: localAndRemoteCommits =
-		localBranchData?.commits.filter((commit) => remoteCommitShas.has(commit.id)) || [];
+		localBranch?.commits.filter((commit) => remoteCommitShas.has(commit.id)) || [];
 
 	$: localAndRemoteCommitShas = new Set(localAndRemoteCommits.map((commit) => commit.id));
 
 	// Find the local and remote commits that are not shared
 	$: localCommits =
-		localBranchData?.commits.filter((commit) => !localAndRemoteCommitShas.has(commit.id)) || [];
+		localBranch?.commits.filter((commit) => !localAndRemoteCommitShas.has(commit.id)) || [];
 	$: remoteCommits =
-		remoteBranchData?.commits.filter((commit) => !localAndRemoteCommitShas.has(commit.id)) || [];
+		remoteBranch?.commits.filter((commit) => !localAndRemoteCommitShas.has(commit.id)) || [];
 
-	$: lineManager = lineManagerFactory.build(
-		{
-			remoteCommits: remoteCommits.map(transformAnyCommit),
-			localCommits: localCommits.map(transformAnyCommit),
-			localAndRemoteCommits: localAndRemoteCommits.map(transformAnyCommit),
-			integratedCommits: []
-		},
-		true
-	);
+	$: lineManager = lineManagerFactory.build({
+		remoteCommits: remoteCommits.map(transformAnyCommit),
+		localCommits: localCommits.map(transformAnyCommit),
+		localAndRemoteCommits: localAndRemoteCommits.map(transformAnyCommit),
+		integratedCommits: []
+	});
 
 	let rsViewport: HTMLDivElement;
 	let laneWidth: number;
@@ -115,19 +84,19 @@
 							{/if}
 						</div>
 					{/if}
-					<div>
+					<div class="branch-group">
 						{#if remoteCommits}
 							{#each remoteCommits as commit, index (commit.id)}
 								<CommitCard
 									isUnapplied
-									first={index === 0}
 									last={index === remoteCommits.length - 1}
 									{commit}
-									commitUrl={$gitHost?.commitUrl(commit.id)}
+									commitUrl={$forge?.commitUrl(commit.id)}
 									type="remote"
+									disableCommitActions={true}
 								>
-									{#snippet lines(topHeightPx)}
-										<LineGroup lineGroup={lineManager.get(commit.id)} {topHeightPx} />
+									{#snippet lines()}
+										<Line line={lineManager.get(commit.id)} />
 									{/snippet}
 								</CommitCard>
 							{/each}
@@ -136,14 +105,14 @@
 							{#each localCommits as commit, index (commit.id)}
 								<CommitCard
 									isUnapplied
-									first={index === 0}
 									last={index === localCommits.length - 1}
 									{commit}
-									commitUrl={$gitHost?.commitUrl(commit.id)}
+									commitUrl={$forge?.commitUrl(commit.id)}
 									type="local"
+									disableCommitActions={true}
 								>
-									{#snippet lines(topHeightPx)}
-										<LineGroup lineGroup={lineManager.get(commit.id)} {topHeightPx} />
+									{#snippet lines()}
+										<Line line={lineManager.get(commit.id)} />
 									{/snippet}
 								</CommitCard>
 							{/each}
@@ -152,14 +121,14 @@
 							{#each localAndRemoteCommits as commit, index (commit.id)}
 								<CommitCard
 									isUnapplied
-									first={index === 0}
 									last={index === localAndRemoteCommits.length - 1}
 									{commit}
-									commitUrl={$gitHost?.commitUrl(commit.id)}
+									commitUrl={$forge?.commitUrl(commit.id)}
 									type="localAndRemote"
+									disableCommitActions={true}
 								>
-									{#snippet lines(topHeightPx)}
-										<LineGroup lineGroup={lineManager.get(commit.id)} {topHeightPx} />
+									{#snippet lines()}
+										<Line line={lineManager.get(commit.id)} />
 									{/snippet}
 								</CommitCard>
 							{/each}
@@ -226,5 +195,19 @@
 
 	.card__content {
 		color: var(--clr-scale-ntrl-30);
+	}
+
+	.branch-group {
+		border: 1px solid var(--clr-border-2);
+		border-radius: var(--radius-m);
+		background: var(--clr-bg-1);
+
+		&:last-child {
+			margin-bottom: 12px;
+		}
+
+		& :global(.commit-row):first-child {
+			border-radius: var(--radius-m) var(--radius-m) 0 0;
+		}
 	}
 </style>

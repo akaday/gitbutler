@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { GitConfigService } from '$lib/backend/gitConfigService';
-	import { Project, ProjectService } from '$lib/backend/projects';
+	import { Project } from '$lib/backend/projects';
 	import SectionCard from '$lib/components/SectionCard.svelte';
 	import SectionCardDisclaimer from '$lib/components/SectionCardDisclaimer.svelte';
 	import Select from '$lib/select/Select.svelte';
@@ -8,17 +8,15 @@
 	import Section from '$lib/settings/Section.svelte';
 	import InfoMessage from '$lib/shared/InfoMessage.svelte';
 	import Link from '$lib/shared/Link.svelte';
-	import TextBox from '$lib/shared/TextBox.svelte';
-	import Toggle from '$lib/shared/Toggle.svelte';
-	import { getContext } from '$lib/utils/context';
+	import { getContext } from '@gitbutler/shared/context';
 	import Button from '@gitbutler/ui/Button.svelte';
-	import { invoke } from '@tauri-apps/api/tauri';
+	import Textbox from '@gitbutler/ui/Textbox.svelte';
+	import Toggle from '@gitbutler/ui/Toggle.svelte';
+	import { invoke } from '@tauri-apps/api/core';
 	import { onMount } from 'svelte';
 
-	const projectService = getContext(ProjectService);
 	const project = getContext(Project);
 
-	let useNewLocking = project?.use_new_locking || false;
 	let signCommits = false;
 
 	const gitConfig = getContext(GitConfigService);
@@ -50,14 +48,9 @@
 	let loading = true;
 	let signCheckResult = false;
 	let errorMessage = '';
-	let succeedingRebases = project.succeedingRebases;
-
-	$: {
-		project.succeedingRebases = succeedingRebases;
-		projectService.updateProject(project);
-	}
 
 	async function checkSigning() {
+		errorMessage = '';
 		checked = true;
 		loading = true;
 		await invoke('check_signing_settings', { id: project.id })
@@ -82,13 +75,6 @@
 		};
 		await gitConfig.setGbConfig(project.id, signUpdate);
 	}
-
-	async function setUseNewLocking(value: boolean) {
-		project.use_new_locking = value;
-		await projectService.updateProject(project);
-	}
-
-	$: setUseNewLocking(useNewLocking);
 
 	onMount(async () => {
 		let gitConfigSettings = await gitConfig.getGbConfig(project.id);
@@ -116,7 +102,7 @@
 			GitButler will sign commits as per your git configuration.
 		</svelte:fragment>
 		<svelte:fragment slot="actions">
-			<Toggle id="signCommits" checked={signCommits} on:click={handleSignCommitsClick} />
+			<Toggle id="signCommits" checked={signCommits} onclick={handleSignCommitsClick} />
 		</svelte:fragment>
 	</SectionCard>
 	{#if signCommits}
@@ -137,18 +123,18 @@
 				{/snippet}
 			</Select>
 
-			<TextBox
+			<Textbox
 				label="Signing key"
 				bind:value={signingKey}
 				required
-				on:change={updateSigningInfo}
+				onchange={updateSigningInfo}
 				placeholder="ex: /Users/bob/.ssh/id_rsa.pub"
 			/>
 
-			<TextBox
+			<Textbox
 				label="Signing program (optional)"
 				bind:value={signingProgram}
-				on:change={updateSigningInfo}
+				onchange={updateSigningInfo}
 				placeholder="ex: /Applications/1Password.app/Contents/MacOS/op-ssh-sign"
 			/>
 
@@ -165,6 +151,11 @@
 							<p>Signing is working correctly</p>
 						{:else}
 							<p>Signing is not working correctly</p>
+						{/if}
+					</svelte:fragment>
+
+					<svelte:fragment slot="content">
+						{#if errorMessage}
 							<pre>{errorMessage}</pre>
 						{/if}
 					</svelte:fragment>

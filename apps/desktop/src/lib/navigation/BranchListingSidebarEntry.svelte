@@ -6,8 +6,9 @@
 		BranchListingService,
 		type BranchListing
 	} from '$lib/branches/branchListing';
-	import { getGitHostListingService } from '$lib/gitHost/interface/gitHostListingService';
-	import { getContext } from '$lib/utils/context';
+	import { getForgeListingService } from '$lib/forge/interface/forgeListingService';
+	import { UserService } from '$lib/stores/user';
+	import { getContext } from '@gitbutler/shared/context';
 	import SidebarEntry from '@gitbutler/ui/SidebarEntry.svelte';
 	import AvatarGroup from '@gitbutler/ui/avatar/AvatarGroup.svelte';
 	import { gravatarUrlFromEmail } from '@gitbutler/ui/avatar/gravatar';
@@ -28,9 +29,12 @@
 	const project = getContext(Project);
 	const gitConfigService = getContext(GitConfigService);
 
-	const gitHostListingService = getGitHostListingService();
-	const prs = $derived($gitHostListingService?.prs);
-	const pr = $derived($prs?.find((pr) => pr.sourceBranch === branchListing.name));
+	const forgeListingService = getForgeListingService();
+	const prs = $derived($forgeListingService?.prs);
+	const pr = $derived($prs?.find((pr) => branchListing.containsPullRequestBranch(pr.sourceBranch)));
+
+	const userService = getContext(UserService);
+	const user = userService.user;
 
 	let branchListingDetails = $state<Readable<BranchListingDetails | undefined>>();
 
@@ -47,7 +51,11 @@
 	}
 
 	function onMouseDown() {
-		goto(formatBranchURL(project, branchListing.name));
+		if (branchListing.virtualBranch?.inWorkspace) {
+			goto(`/${project.id}/board`);
+		} else {
+			goto(formatBranchURL(project, branchListing.name));
+		}
 	}
 
 	const selected = $derived($page.url.pathname === formatBranchURL(project, branchListing.name));
@@ -92,7 +100,10 @@
 		if (ownedByUser) {
 			const name = (await gitConfigService.get('user.name')) || unknownName;
 			const email = (await gitConfigService.get('user.email')) || unknownEmail;
-			const srcUrl = await gravatarUrlFromEmail(email);
+			const srcUrl =
+				email.toLowerCase() === $user?.email?.toLowerCase()
+					? $user?.picture
+					: await gravatarUrlFromEmail(email);
 
 			avatars = [{ name, srcUrl }];
 		} else if (branchListingDetails) {
@@ -100,7 +111,10 @@
 				branchListingDetails.authors.map(async (author) => {
 					return {
 						name: author.name || unknownName,
-						srcUrl: await gravatarUrlFromEmail(author.email || unknownEmail)
+						srcUrl:
+							(author.email?.toLowerCase() === $user?.email?.toLowerCase()
+								? $user?.picture
+								: author.gravatarUrl) ?? (await gravatarUrlFromEmail(author.email || unknownEmail))
 					};
 				})
 			);
@@ -108,10 +122,15 @@
 			avatars = [];
 		}
 	}
+
+	const stackBranches = $derived(branchListing.virtualBranch?.stackBranches);
+	const filteredStackBranches = $derived(
+		stackBranches && stackBranches.length > 0 ? stackBranches : [branchListing.name]
+	);
 </script>
 
 <SidebarEntry
-	title={branchListing.name}
+	series={filteredStackBranches}
 	remotes={branchListing.remotes}
 	local={branchListing.hasLocal}
 	applied={branchListing.virtualBranch?.inWorkspace}

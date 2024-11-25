@@ -1,83 +1,92 @@
 <script lang="ts">
 	import MergeButton from './MergeButton.svelte';
-	import ViewPrButton from './ViewPrButton.svelte';
-	import InfoMessage from '../shared/InfoMessage.svelte';
 	import { Project } from '$lib/backend/projects';
+	import { BaseBranch } from '$lib/baseBranch/baseBranch';
 	import { BaseBranchService } from '$lib/baseBranch/baseBranchService';
-	import { getGitHostChecksMonitor } from '$lib/gitHost/interface/gitHostChecksMonitor';
-	import { getGitHostListingService } from '$lib/gitHost/interface/gitHostListingService';
-	import { getGitHostPrService } from '$lib/gitHost/interface/gitHostPrService';
-	import { getContext } from '$lib/utils/context';
-	import * as toasts from '$lib/utils/toasts';
+	import ContextMenu from '$lib/components/contextmenu/ContextMenu.svelte';
+	import ContextMenuItem from '$lib/components/contextmenu/ContextMenuItem.svelte';
+	import ContextMenuSection from '$lib/components/contextmenu/ContextMenuSection.svelte';
+	import { type ForgeChecksMonitor } from '$lib/forge/interface/forgeChecksMonitor';
+	import { getForgeListingService } from '$lib/forge/interface/forgeListingService';
+	import { getForgePrService } from '$lib/forge/interface/forgePrService';
+	import { showError } from '$lib/notifications/toasts';
+	import { copyToClipboard } from '$lib/utils/clipboard';
+	import { openExternalUrl } from '$lib/utils/url';
 	import { VirtualBranchService } from '$lib/vbranches/virtualBranch';
+	import { getContext, getContextStore } from '@gitbutler/shared/context';
 	import Button from '@gitbutler/ui/Button.svelte';
 	import { type ComponentColor } from '@gitbutler/ui/utils/colorTypes';
-	import { createTimeAgoStore } from '@gitbutler/ui/utils/timeAgo';
-	import type { ChecksStatus } from '$lib/gitHost/interface/types';
+	import type { ForgePrMonitor } from '$lib/forge/interface/forgePrMonitor';
+	import type { DetailedPullRequest } from '$lib/forge/interface/types';
 	import type { MessageStyle } from '$lib/shared/InfoMessage.svelte';
 	import type iconsJson from '@gitbutler/ui/data/icons.json';
 
 	interface Props {
-		upstreamName: string;
+		pr: DetailedPullRequest;
+		checksMonitor?: ForgeChecksMonitor;
+		prMonitor?: ForgePrMonitor;
+		reloadPR: () => void;
+		reopenPr: () => Promise<void>;
+		openPrDetailsModal: () => void;
 	}
 
-	const { upstreamName }: Props = $props();
+	const { pr, checksMonitor, prMonitor, reloadPR, reopenPr, openPrDetailsModal }: Props = $props();
 
 	type StatusInfo = {
 		text: string;
 		icon: keyof typeof iconsJson | undefined;
 		style?: ComponentColor;
 		messageStyle?: MessageStyle;
+		tooltip?: string;
 	};
+
+	let contextMenuEl = $state<ReturnType<typeof ContextMenu>>();
+	let contextMenuTarget = $state<HTMLElement>();
 
 	const vbranchService = getContext(VirtualBranchService);
 	const baseBranchService = getContext(BaseBranchService);
+	const baseBranch = getContextStore(BaseBranch);
 	const project = getContext(Project);
 
-	const gitHostListingService = getGitHostListingService();
-	const prStore = $derived($gitHostListingService?.prs);
-	const prs = $derived(prStore ? $prStore : undefined);
+	const forgeListingService = getForgeListingService();
+	const prService = getForgePrService();
 
-	const listedPr = $derived(prs?.find((pr) => pr.sourceBranch === upstreamName));
-	const prNumber = $derived(listedPr?.number);
+	const checks = $derived(checksMonitor?.status);
 
-	const prService = getGitHostPrService();
-	const prMonitor = $derived(prNumber ? $prService?.prMonitor(prNumber) : undefined);
-
-	const checksMonitor = getGitHostChecksMonitor();
-	// This PR has been loaded on demand, and contains more details than the version
-	// obtained when listing them.
-	const pr = $derived(prMonitor?.pr);
-	const checks = $derived($checksMonitor?.status);
+	const baseBranchRepo = $derived(baseBranchService.repo);
+	const baseIsTargetBranch = $derived(
+		pr
+			? $baseBranch.shortName === pr.baseBranch && $baseBranchRepo?.hash === pr?.baseRepo?.hash
+			: false
+	);
 
 	// While the pr monitor is set to fetch updates by interval, we want
 	// frequent updates while checks are running.
 	$effect(() => {
-		if ($checks) prMonitor?.refresh();
+		if ($checks) {
+			prMonitor?.refresh();
+		}
 	});
 
 	let isMerging = $state(false);
 
-	const lastFetch = $derived(prMonitor?.lastFetch);
-	const timeAgo = $derived($lastFetch ? createTimeAgoStore($lastFetch) : undefined);
-
 	const mrLoading = $derived(prMonitor?.loading);
-	const checksLoading = $derived($checksMonitor?.loading);
+	const checksLoading = $derived(checksMonitor?.loading);
+	let loading = $state(false);
 
-	const checksError = $derived($checksMonitor?.error);
+	const checksError = $derived(checksMonitor?.error);
 	const detailsError = $derived(prMonitor?.error);
 
-	function getChecksCount(status: ChecksStatus): string {
-		if (!status) return 'Running checks';
+	const checksTagInfo: StatusInfo = $derived.by(() => {
+		if (!checksMonitor && pr.fork) {
+			return {
+				style: 'neutral',
+				icon: 'info',
+				text: 'No PR checks',
+				tooltip: 'Checks for forked repos only available on the web.'
+			};
+		}
 
-		const finished = status.finished || 0;
-		const skipped = status.skipped || 0;
-		const total = (status.totalCount || 0) - skipped;
-
-		return `Checks completed ${finished}/${total}`;
-	}
-
-	const checksTagInfo: StatusInfo | undefined = $derived.by(() => {
 		if ($checksError || $detailsError) {
 			return { style: 'error', icon: 'warning-small', text: 'Failed to load' };
 		}
@@ -94,126 +103,170 @@
 				? $checks.success
 					? 'Checks passed'
 					: 'Checks failed'
-				: getChecksCount($checks);
+				: 'Checks running';
 			return { style, icon, text };
 		}
 		if ($checksLoading) {
-			return { style: 'neutral', icon: 'spinner', text: ' Checks' };
+			return { style: 'neutral', icon: 'spinner', text: 'Checks' };
 		}
+
+		return { style: 'neutral', icon: undefined, text: 'No PR checks' };
 	});
 
 	const prStatusInfo: StatusInfo = $derived.by(() => {
-		if (!$pr) {
+		if (!pr) {
 			return { text: 'Status', icon: 'spinner', style: 'neutral' };
 		}
 
-		if ($pr?.mergedAt) {
+		if (pr?.mergedAt) {
 			return { text: 'Merged', icon: 'merged-pr-small', style: 'purple' };
 		}
 
-		if ($pr?.closedAt) {
+		if (pr?.closedAt) {
 			return { text: 'Closed', icon: 'closed-pr-small', style: 'error' };
 		}
 
-		if ($pr?.draft) {
+		if (pr?.draft) {
 			return { text: 'Draft', icon: 'draft-pr-small', style: 'neutral' };
 		}
 
 		return { text: 'Open', icon: 'pr-small', style: 'success' };
 	});
 
-	const infoProps: StatusInfo | undefined = $derived.by(() => {
-		const mergeableState = $pr?.mergeableState;
-		if (mergeableState === 'blocked' && !$checks && !$checksLoading) {
-			return {
-				icon: 'error',
-				messageStyle: 'error',
-				text: 'Merge is blocked due to pending reviews or missing dependencies. Resolve the issues before merging.'
-			};
+	const mergability = $derived.by(() => {
+		let disabled = true;
+		let tooltip = undefined;
+		if (!baseIsTargetBranch) {
+			tooltip = 'Pull request is not next in stack.';
+		} else if ($mrLoading) {
+			tooltip = 'Reloading pull request data.';
+		} else if ($checksLoading) {
+			tooltip = 'Reloading checks data.';
+		} else if (pr?.draft) {
+			tooltip = 'Pull request is a draft.';
+		} else if (pr?.mergeableState === 'blocked') {
+			tooltip = 'Pull request needs approval.';
+		} else if (pr?.mergeableState === 'unknown') {
+			tooltip = 'Pull request mergeability is unknown.';
+		} else if (pr?.mergeableState === 'behind') {
+			tooltip = 'Pull request base is too far behind.';
+		} else if (pr?.mergeableState === 'dirty') {
+			tooltip = 'Pull request has conflicts.';
+		} else if (!pr?.mergeable) {
+			tooltip = 'Pull request is not mergeable.';
+		} else {
+			disabled = false;
 		}
-
-		if ($checks?.completed) {
-			if ($pr?.draft) {
-				return {
-					icon: 'warning',
-					messageStyle: 'neutral',
-					text: 'This pull request is still a work in progress. Draft pull requests cannot be merged.'
-				};
-			}
-
-			if (mergeableState === 'unstable') {
-				return {
-					icon: 'warning',
-					messageStyle: 'warning',
-					text: 'Your PR is causing instability or errors in the build or tests. Review the checks and fix the issues before merging.'
-				};
-			}
-
-			if (mergeableState === 'dirty') {
-				return {
-					icon: 'warning',
-					messageStyle: 'warning',
-					text: 'Your PR has conflicts that must be resolved before merging.'
-				};
-			}
-			if (
-				mergeableState === 'blocked' &&
-				!$checksLoading &&
-				$checks?.failed &&
-				$checks.failed > 0
-			) {
-				return {
-					icon: 'error',
-					messageStyle: 'error',
-					text: 'Merge is blocked due to failing checks. Resolve the issues before merging.'
-				};
-			}
-		}
+		return { disabled, tooltip };
 	});
 </script>
 
-{#if $pr}
-	<div class="card pr-card">
-		<div class="floating-button">
-			<Button
-				icon="update-small"
-				size="tag"
-				style="ghost"
-				outline
-				loading={$mrLoading || $checksLoading}
-				tooltip={$timeAgo ? 'Updated ' + $timeAgo : ''}
-				onclick={async () => {
-					$checksMonitor?.update();
-					prMonitor?.refresh();
+{#if pr}
+	<ContextMenu bind:this={contextMenuEl} rightClickTrigger={contextMenuTarget}>
+		<ContextMenuSection>
+			<ContextMenuItem
+				label="Open in browser"
+				onclick={() => {
+					openExternalUrl(pr.htmlUrl);
+					contextMenuEl?.close();
 				}}
 			/>
+			<ContextMenuItem
+				label="Copy link"
+				onclick={() => {
+					copyToClipboard(pr.htmlUrl);
+					contextMenuEl?.close();
+				}}
+			/>
+			<ContextMenuItem
+				label="Show details"
+				onclick={() => {
+					openPrDetailsModal();
+					contextMenuEl?.close();
+				}}
+			/>
+			<ContextMenuItem
+				label="Refetch status"
+				onclick={() => {
+					reloadPR();
+					contextMenuEl?.close();
+				}}
+			/>
+		</ContextMenuSection>
+		{#if checksTagInfo}
+			{#if checksTagInfo.text !== 'No PR checks' && checksTagInfo.text !== 'Checks'}
+				<ContextMenuSection>
+					<ContextMenuItem
+						label="Open checks"
+						onclick={() => {
+							openExternalUrl(`${pr.htmlUrl}/checks`);
+							contextMenuEl?.close();
+						}}
+					/>
+					<ContextMenuItem
+						label="Copy checks"
+						onclick={() => {
+							copyToClipboard(`${pr.htmlUrl}/checks`);
+							contextMenuEl?.close();
+						}}
+					/>
+				</ContextMenuSection>
+			{/if}
+		{/if}
+	</ContextMenu>
+
+	<div
+		bind:this={contextMenuTarget}
+		role="article"
+		class="pr-header"
+		oncontextmenu={(e: MouseEvent) => {
+			e.preventDefault();
+			e.stopPropagation();
+			contextMenuEl?.open(e);
+		}}
+	>
+		<div class="text-13 text-semibold pr-header-title">
+			<span style="color: var(--clr-scale-ntrl-50)">PR #{pr?.number}:</span>
+			<span>{pr?.title}</span>
 		</div>
-		<div class="pr-title text-13 text-semibold">
-			<span style="color: var(--clr-scale-ntrl-50)">PR #{$pr?.number}:</span>
-			{$pr.title}
-		</div>
-		<div class="pr-tags">
+		<div class="pr-header-tags">
 			<Button
+				reversedDirection
 				size="tag"
 				clickable={false}
 				icon={prStatusInfo.icon}
 				style={prStatusInfo.style}
-				kind={prStatusInfo.text !== 'Open' && prStatusInfo.text !== 'Status' ? 'solid' : 'soft'}
+				kind={'soft'}
+				tooltip="PR status"
 			>
 				{prStatusInfo.text}
 			</Button>
-			{#if !$pr.closedAt && checksTagInfo}
+			{#if !pr.closedAt && checksTagInfo}
 				<Button
 					size="tag"
 					clickable={false}
 					icon={checksTagInfo.icon}
 					style={checksTagInfo.style}
 					kind={checksTagInfo.icon === 'success-small' ? 'solid' : 'soft'}
+					tooltip={checksTagInfo.tooltip}
 				>
 					{checksTagInfo.text}
 				</Button>
 			{/if}
-			<ViewPrButton url={$pr.htmlUrl} />
+			{#if pr.htmlUrl}
+				<Button
+					icon="open-link"
+					size="tag"
+					style="ghost"
+					outline
+					tooltip="Open in browser"
+					onclick={() => {
+						openExternalUrl(pr.htmlUrl);
+					}}
+				>
+					View PR
+				</Button>
+			{/if}
 		</div>
 
 		<!--
@@ -224,81 +277,82 @@
         determining "no checks will run for this PR" such that we can show the merge button
         immediately.
         -->
-		{#if $pr}
-			<div class="pr-actions">
-				{#if infoProps}
-					<InfoMessage icon={infoProps.icon} filled outlined={false} style={infoProps.messageStyle}>
-						<svelte:fragment slot="content">
-							{infoProps.text}
-						</svelte:fragment>
-					</InfoMessage>
-				{/if}
-
+		<div class="pr-header-actions">
+			{#if pr.state === 'open'}
 				<MergeButton
 					wide
 					projectId={project.id}
-					disabled={$mrLoading ||
-						$checksLoading ||
-						$pr.draft ||
-						!$pr.mergeable ||
-						['dirty', 'unknown', 'blocked', 'behind'].includes($pr.mergeableState)}
+					disabled={mergability.disabled}
+					tooltip={mergability.tooltip}
 					loading={isMerging}
 					on:click={async (e) => {
-						if (!$pr) return;
+						if (!pr) return;
 						isMerging = true;
 						const method = e.detail.method;
 						try {
-							await $prService?.merge(method, $pr.number);
+							await $prService?.merge(method, pr.number);
 							await baseBranchService.fetchFromRemotes();
 							await Promise.all([
 								prMonitor?.refresh(),
-								$gitHostListingService?.refresh(),
+								$forgeListingService?.refresh(),
 								vbranchService.refresh(),
 								baseBranchService.refresh()
 							]);
 						} catch (err) {
 							console.error(err);
-							toasts.error('Failed to merge pull request');
+							showError('Failed to merge PR', err);
 						} finally {
 							isMerging = false;
 						}
 					}}
 				/>
-			</div>
-		{/if}
+			{:else if !pr.merged}
+				<Button
+					style="ghost"
+					outline
+					{loading}
+					onclick={async () => {
+						loading = true;
+						try {
+							await reopenPr?.();
+						} finally {
+							loading = false;
+						}
+					}}
+				>
+					Reopen pull request
+				</Button>
+			{/if}
+		</div>
 	</div>
 {/if}
 
 <style lang="postcss">
-	.pr-card {
+	.pr-header {
 		position: relative;
-		padding: 14px;
-		margin-bottom: 8px;
+		display: flex;
+		flex-direction: column;
+		border: 1px solid var(--clr-border-2);
+		border-radius: var(--radius-m);
 	}
 
-	.pr-title {
+	.pr-header-title {
 		color: var(--clr-scale-ntrl-0);
-		margin-bottom: 12px;
-		margin-right: 28px;
+		padding: 14px 14px 12px 14px;
 		user-select: text;
 		cursor: text;
 	}
 
-	.pr-tags {
+	.pr-header-tags {
 		display: flex;
 		gap: 4px;
+		padding: 0 14px 12px 14px;
 	}
 
-	.pr-actions {
-		margin-top: 14px;
+	.pr-header-actions {
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
-	}
-
-	.floating-button {
-		position: absolute;
-		right: 6px;
-		top: 6px;
+		padding: 0 14px 12px 14px;
 	}
 </style>

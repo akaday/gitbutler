@@ -1,19 +1,19 @@
 <script lang="ts">
-	import { stackingFeature } from '$lib/config/uiFeatureFlags';
-	import { maybeGetContextStore } from '$lib/utils/context';
 	import { SelectedOwnership } from '$lib/vbranches/ownership';
+	import { maybeGetContextStore } from '@gitbutler/shared/context';
 	import Badge from '@gitbutler/ui/Badge.svelte';
 	import Checkbox from '@gitbutler/ui/Checkbox.svelte';
-	import type { AnyFile } from '$lib/vbranches/types';
+	import type { AnyFile, ConflictEntries } from '$lib/vbranches/types';
 	import type { Writable } from 'svelte/store';
 
 	interface Props {
 		title: string;
 		files: AnyFile[];
 		showCheckboxes?: boolean;
+		conflictedFiles?: ConflictEntries;
 	}
 
-	const { title, files, showCheckboxes = false }: Props = $props();
+	const { title, files, showCheckboxes = false, conflictedFiles }: Props = $props();
 
 	const selectedOwnership: Writable<SelectedOwnership> | undefined =
 		maybeGetContextStore(SelectedOwnership);
@@ -50,7 +50,7 @@
 	const checked = $derived(isAllChecked($selectedOwnership));
 </script>
 
-<div class="header" class:stacking={$stackingFeature}>
+<div class="header">
 	<div class="header__left">
 		{#if showCheckboxes && files.length > 1}
 			<Checkbox
@@ -70,7 +70,7 @@
 		{/if}
 		<div class="header__title text-13 text-semibold">
 			<span>{title}</span>
-			<Badge label={files.length} />
+			<Badge label={files.length + (conflictedFiles?.entries.size || 0)} />
 		</div>
 	</div>
 </div>
@@ -83,11 +83,7 @@
 		padding: 14px;
 		border-bottom: none;
 		border-radius: var(--radius-m) var(--radius-m) 0 0;
-		background-color: var(--clr-bg-1);
-
-		&.stacking {
-			background-color: transparent !important;
-		}
+		background-color: transparent !important;
 	}
 	.header__title {
 		display: flex;

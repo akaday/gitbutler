@@ -1,18 +1,16 @@
 <script lang="ts">
 	import { BaseBranchService } from '$lib/baseBranch/baseBranchService';
 	import { BranchListingService } from '$lib/branches/branchListing';
-	import { getGitHostListingService } from '$lib/gitHost/interface/gitHostListingService';
-	import { getContext } from '$lib/utils/context';
-	import { VirtualBranchService } from '$lib/vbranches/virtualBranch';
+	import { getForgeListingService } from '$lib/forge/interface/forgeListingService';
+	import { getContext } from '@gitbutler/shared/context';
 	import Button from '@gitbutler/ui/Button.svelte';
 	import TimeAgo from '@gitbutler/ui/TimeAgo.svelte';
 
 	const baseBranchService = getContext(BaseBranchService);
-	const vbranchService = getContext(VirtualBranchService);
 	const baseBranch = baseBranchService.base;
 	const branchListingService = getContext(BranchListingService);
 
-	const listingService = getGitHostListingService();
+	const listingService = getForgeListingService();
 
 	let loading = $state(false);
 </script>
@@ -34,7 +32,6 @@
 			await baseBranchService.fetchFromRemotes('modal');
 			await Promise.all([
 				$listingService?.refresh(),
-				vbranchService.refresh(),
 				baseBranchService.refresh(),
 				branchListingService.refresh()
 			]);

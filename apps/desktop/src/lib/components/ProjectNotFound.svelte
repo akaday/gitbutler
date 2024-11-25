@@ -3,16 +3,16 @@
 	import ProjectSwitcher from './ProjectSwitcher.svelte';
 	import RemoveProjectButton from './RemoveProjectButton.svelte';
 	import notFoundSvg from '$lib/assets/illustrations/not-found.svg?raw';
-	import { ProjectService } from '$lib/backend/projects';
+	import { ProjectsService } from '$lib/backend/projects';
 	import InfoMessage, { type MessageStyle } from '$lib/shared/InfoMessage.svelte';
-	import Spacer from '$lib/shared/Spacer.svelte';
-	import { getContext } from '$lib/utils/context';
+	import { getContext } from '@gitbutler/shared/context';
 	import Button from '@gitbutler/ui/Button.svelte';
+	import Spacer from '@gitbutler/ui/Spacer.svelte';
 
-	const projectService = getContext(ProjectService);
-	const id = projectService.getLastOpenedProject();
+	const projectsService = getContext(ProjectsService);
+	const id = projectsService.getLastOpenedProject();
 	const projectPromise = id
-		? projectService.getProject(id, true)
+		? projectsService.getProject(id, true)
 		: Promise.reject('Failed to get project');
 
 	let deleteSucceeded: boolean | undefined = $state(undefined);
@@ -22,8 +22,8 @@
 		isDeleting = true;
 		deleteProject: {
 			try {
-				await projectService.deleteProject(id);
-			} catch (e) {
+				await projectsService.deleteProject(id);
+			} catch {
 				deleteSucceeded = false;
 				break deleteProject;
 			}
@@ -33,7 +33,7 @@
 	}
 
 	async function locate(id: string) {
-		await projectService.relocateProject(id);
+		await projectsService.relocateProject(id);
 	}
 
 	interface DeletionStatus {
@@ -49,11 +49,11 @@
 </script>
 
 <DecorativeSplitView img={notFoundSvg}>
-	<div class="container" data-tauri-drag-region>
+	<div class="container">
 		{#await projectPromise then project}
 			{#if deleteSucceeded === undefined}
 				<div class="text-content">
-					<h2 class="title-text text-18 text-body text-bold" data-tauri-drag-region>
+					<h2 class="title-text text-18 text-body text-bold">
 						Can’t find "{project.title}"
 					</h2>
 
@@ -61,7 +61,9 @@
 						Sorry, we can't find the project you're looking for.
 						<br />
 						It might have been removed or doesn't exist.
-						<button class="check-again-btn" onclick={() => location.reload()}>Click here</button>
+						<button type="button" class="check-again-btn" onclick={() => location.reload()}
+							>Click here</button
+						>
 						to check again.
 						<br />
 						The current project path: <span class="code-string">{project.path}</span>

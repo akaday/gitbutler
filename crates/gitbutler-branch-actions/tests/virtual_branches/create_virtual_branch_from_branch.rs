@@ -46,9 +46,13 @@ fn integration() {
     };
 
     // checkout a existing remote branch
-    let branch_id =
-        gitbutler_branch_actions::create_virtual_branch_from_branch(project, &branch_name, None)
-            .unwrap();
+    let branch_id = gitbutler_branch_actions::create_virtual_branch_from_branch(
+        project,
+        &branch_name,
+        None,
+        Some(123),
+    )
+    .unwrap();
 
     {
         // add a commit
@@ -77,9 +81,9 @@ fn integration() {
             .find(|branch| branch.id == branch_id)
             .unwrap();
 
-        assert!(branch.commits[0].is_remote);
+        assert!(branch.commits[0].is_local_and_remote);
         assert!(!branch.commits[0].is_integrated);
-        assert!(branch.commits[1].is_remote);
+        assert!(branch.commits[1].is_local_and_remote);
         assert!(!branch.commits[1].is_integrated);
 
         repository.rebase_and_merge(&branch_name);
@@ -96,9 +100,14 @@ fn integration() {
             .find(|branch| branch.id == branch_id)
             .unwrap();
 
-        assert!(branch.commits[0].is_remote);
+        assert_eq!(
+            branch.series.first().unwrap().clone().unwrap().pr_number,
+            Some(123)
+        );
+
+        assert!(branch.commits[0].is_local_and_remote);
         assert!(branch.commits[0].is_integrated);
-        assert!(branch.commits[1].is_remote);
+        assert!(branch.commits[1].is_local_and_remote);
         assert!(branch.commits[1].is_integrated);
     }
 }
@@ -133,6 +142,7 @@ fn no_conflicts() {
     let branch_id = gitbutler_branch_actions::create_virtual_branch_from_branch(
         project,
         &"refs/remotes/origin/branch".parse().unwrap(),
+        None,
         None,
     )
     .unwrap();
@@ -181,6 +191,7 @@ fn conflicts_with_uncommited() {
     let new_branch_id = gitbutler_branch_actions::create_virtual_branch_from_branch(
         project,
         &"refs/remotes/origin/branch".parse().unwrap(),
+        None,
         None,
     )
     .unwrap();
@@ -236,6 +247,7 @@ fn conflicts_with_commited() {
         project,
         &"refs/remotes/origin/branch".parse().unwrap(),
         None,
+        None,
     )
     .unwrap();
     let new_branch = gitbutler_branch_actions::list_virtual_branches(project)
@@ -265,7 +277,8 @@ fn from_default_target() {
         gitbutler_branch_actions::create_virtual_branch_from_branch(
             project,
             &"refs/remotes/origin/master".parse().unwrap(),
-            None
+            None,
+            None,
         )
         .unwrap_err()
         .to_string(),
@@ -289,7 +302,8 @@ fn from_non_existent_branch() {
         gitbutler_branch_actions::create_virtual_branch_from_branch(
             project,
             &"refs/remotes/origin/branch".parse().unwrap(),
-            None
+            None,
+            None,
         )
         .unwrap_err()
         .to_string(),
@@ -330,6 +344,7 @@ fn from_state_remote_branch() {
         project,
         &"refs/remotes/origin/branch".parse().unwrap(),
         None,
+        None,
     )
     .unwrap();
 
@@ -344,124 +359,11 @@ fn from_state_remote_branch() {
 #[cfg(test)]
 mod conflict_cases {
     use bstr::ByteSlice as _;
-    use gitbutler_project::UpdateRequest;
     use gitbutler_testsupport::testing_repository::{
         assert_commit_tree_matches, assert_tree_matches,
     };
 
     use super::*;
-
-    /// Its possible to have a setup where two branches are mergable, but it's
-    /// not possible to rebase one on top of the other.
-    ///
-    /// The setup is as follows:
-    ///
-    /// B -foo.txt
-    /// | +bar.txt "b"
-    /// |
-    /// A +foo.txt "a"   X +foo.txt "x"
-    /// |           ----/
-    /// |     /----
-    /// Root
-    ///
-    /// We set X commit as the target commit, and then we try to apply the branch
-    /// with the B commit.
-    #[test]
-    fn apply_mergable_but_not_rebasable_branch_without_fearless() {
-        let Test {
-            repository,
-            project,
-            projects,
-            ..
-        } = &Test::default();
-
-        let git_repository = &repository.local_repository;
-        let signature = git2::Signature::now("caleb", "caleb@gitbutler.com").unwrap();
-
-        let head_commit = git_repository.head().unwrap().peel_to_commit().unwrap();
-
-        git_repository
-            .reference("refs/remotes/origin/master", head_commit.id(), true, ":D")
-            .unwrap();
-
-        gitbutler_branch_actions::set_base_branch(
-            project,
-            &"refs/remotes/origin/master".parse().unwrap(),
-        )
-        .unwrap();
-
-        // Ensure fearless rebasing is disabled
-        let project = projects
-            .update(&UpdateRequest {
-                id: project.id,
-                succeeding_rebases: Some(false),
-                ..Default::default()
-            })
-            .unwrap();
-
-        // Make A and B and unapply them.
-        fs::write(repository.path().join("foo.txt"), "a").unwrap();
-        repository.commit_all("A");
-        fs::remove_file(repository.path().join("foo.txt")).unwrap();
-        fs::write(repository.path().join("bar.txt"), "b").unwrap();
-        repository.commit_all("B");
-
-        let (branches, _) = gitbutler_branch_actions::list_virtual_branches(&project).unwrap();
-        let branch = branches[0].clone();
-
-        let branch_refname =
-            gitbutler_branch_actions::save_and_unapply_virutal_branch(&project, branch.id).unwrap();
-
-        // Make X and set base branch to X
-        let mut tree_builder = git_repository
-            .treebuilder(Some(
-                &git_repository.head().unwrap().peel_to_tree().unwrap(),
-            ))
-            .unwrap();
-        let blob_oid = git_repository.blob("x".as_bytes()).unwrap();
-        tree_builder
-            .insert("foo.txt", blob_oid, git2::FileMode::Blob.into())
-            .unwrap();
-
-        git_repository
-            .commit(
-                Some("refs/remotes/origin/master"),
-                &signature,
-                &signature,
-                "X",
-                &git_repository
-                    .find_tree(tree_builder.write().unwrap())
-                    .unwrap(),
-                &[&head_commit],
-            )
-            .unwrap();
-
-        gitbutler_branch_actions::integrate_upstream(&project, &[], None).unwrap();
-
-        // Apply B
-
-        gitbutler_branch_actions::create_virtual_branch_from_branch(
-            &project,
-            &Refname::from_str(&branch_refname).unwrap(),
-            None,
-        )
-        .unwrap();
-
-        // We should see a merge commit
-        let (branches, _) = gitbutler_branch_actions::list_virtual_branches(&project).unwrap();
-        let branch = branches[0].clone();
-
-        assert_eq!(branch.commits.len(), 3, "Should have merge commit, B, A");
-        assert_eq!(
-            branch.commits[0].description.to_str().unwrap(),
-            "Merge `master` into `B`"
-        );
-        assert!(!branch.commits[0].conflicted);
-        assert_eq!(branch.commits[1].description.to_str().unwrap(), "B");
-        assert!(!branch.commits[1].conflicted);
-        assert_eq!(branch.commits[2].description.to_str().unwrap(), "A");
-        assert!(!branch.commits[2].conflicted);
-    }
 
     /// Same setup as above, but with fearless rebasing, so we should end up
     /// with some conflicted commits.
@@ -470,7 +372,6 @@ mod conflict_cases {
         let Test {
             repository,
             project,
-            projects,
             ..
         } = &Test::default();
 
@@ -489,15 +390,6 @@ mod conflict_cases {
         )
         .unwrap();
 
-        // Ensure fearless rebasing is disabled
-        let project = projects
-            .update(&UpdateRequest {
-                id: project.id,
-                succeeding_rebases: Some(true),
-                ..Default::default()
-            })
-            .unwrap();
-
         // Make A and B and unapply them.
         fs::write(repository.path().join("foo.txt"), "a").unwrap();
         repository.commit_all("A");
@@ -505,11 +397,11 @@ mod conflict_cases {
         fs::write(repository.path().join("bar.txt"), "b").unwrap();
         repository.commit_all("B");
 
-        let (branches, _) = gitbutler_branch_actions::list_virtual_branches(&project).unwrap();
+        let (branches, _) = gitbutler_branch_actions::list_virtual_branches(project).unwrap();
         let branch = branches[0].clone();
 
         let branch_refname =
-            gitbutler_branch_actions::save_and_unapply_virutal_branch(&project, branch.id).unwrap();
+            gitbutler_branch_actions::save_and_unapply_virutal_branch(project, branch.id).unwrap();
 
         // Make X and set base branch to X
         let mut tree_builder = git_repository
@@ -535,19 +427,20 @@ mod conflict_cases {
             )
             .unwrap();
 
-        gitbutler_branch_actions::integrate_upstream(&project, &[], None).unwrap();
+        gitbutler_branch_actions::integrate_upstream(project, &[], None).unwrap();
 
         // Apply B
 
         gitbutler_branch_actions::create_virtual_branch_from_branch(
-            &project,
+            project,
             &Refname::from_str(&branch_refname).unwrap(),
+            None,
             None,
         )
         .unwrap();
 
         // We should see a merge commit
-        let (branches, _) = gitbutler_branch_actions::list_virtual_branches(&project).unwrap();
+        let (branches, _) = gitbutler_branch_actions::list_virtual_branches(project).unwrap();
         let branch = branches[0].clone();
 
         assert_eq!(branch.commits.len(), 2, "Should have B' and A'");

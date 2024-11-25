@@ -5,12 +5,12 @@ use std::{
     time::SystemTime,
 };
 
-use gitbutler_branch::BranchId;
 use gitbutler_diff::{GitHunk, Hunk, HunkHash};
+use gitbutler_hunk_dependency::locks::HunkLock;
 use gitbutler_serde::BStringForFrontend;
 use itertools::Itertools;
 use md5::Digest;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 // this struct is a mapping to the view `Hunk` type in Typescript
 // found in src-tauri/src/routes/repo/[project_id]/types.ts
@@ -42,17 +42,6 @@ pub struct VirtualBranchHunk {
     pub poisoned: bool,
 }
 
-// A hunk is locked when it depends on changes in commits that are in your
-// workspace. A hunk can be locked to more than one branch if it overlaps
-// with more than one committed hunk.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Copy)]
-#[serde(rename_all = "camelCase")]
-pub struct HunkLock {
-    pub branch_id: BranchId,
-    #[serde(with = "gitbutler_serde::oid")]
-    pub commit_id: git2::Oid,
-}
-
 /// Lifecycle
 impl VirtualBranchHunk {
     pub(crate) fn gen_id(new_start: u32, new_lines: u32) -> String {
@@ -62,14 +51,10 @@ impl VirtualBranchHunk {
         project_path: &Path,
         file_path: PathBuf,
         hunk: GitHunk,
+        hash: Digest,
         mtimes: &mut MTimeCache,
-        locks: &HashMap<Digest, Vec<HunkLock>>,
+        locked_to: &[HunkLock],
     ) -> Self {
-        let hash = Hunk::hash_diff(&hunk.diff_lines);
-
-        let binding = Vec::new();
-        let locked_to = locks.get(&hash).unwrap_or(&binding);
-
         // Get the unique branch ids (lock.branch_id) from hunk.locked_to that a hunk is locked to (if any)
         let branch_deps_count = locked_to.iter().map(|lock| lock.branch_id).unique().count();
 
@@ -85,7 +70,7 @@ impl VirtualBranchHunk {
             binary: hunk.binary,
             hash,
             locked: !locked_to.is_empty(),
-            locked_to: Some(locked_to.clone().into_boxed_slice()),
+            locked_to: Some(locked_to.into()),
             change_type: hunk.change_type,
             poisoned: branch_deps_count > 1,
         }
@@ -122,12 +107,17 @@ pub(crate) fn file_hunks_from_diffs<'a>(
             let hunks = hunks
                 .into_iter()
                 .map(|hunk| {
+                    let hash = Hunk::hash_diff(&hunk.diff_lines);
+                    let binding = Vec::new();
+                    let locked_to = locks.get(&hash).unwrap_or(&binding);
+
                     VirtualBranchHunk::from_diff_hunk(
                         project_path,
                         file_path.clone(),
                         hunk,
+                        hash,
                         &mut mtimes,
-                        locks,
+                        locked_to,
                     )
                 })
                 .collect::<Vec<_>>();
@@ -164,3 +154,13 @@ impl MTimeCache {
         mtime
     }
 }
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct VirtualBranchHunkRange {
+    /// The old line number, if any.
+    pub old: Option<u32>,
+    /// The new line number, if any.
+    pub new: Option<u32>,
+}
+
+pub type VirtualBranchHunkRangeMap = HashMap<String, Vec<VirtualBranchHunkRange>>;

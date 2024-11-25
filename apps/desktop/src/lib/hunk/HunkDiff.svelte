@@ -2,7 +2,6 @@
 	import { type Row, Operation, type DiffRows } from './types';
 	import ScrollableContainer from '$lib/scroll/ScrollableContainer.svelte';
 	import { create } from '$lib/utils/codeHighlight';
-	import { maybeGetContextStore } from '$lib/utils/context';
 	import {
 		type ContentSection,
 		SectionType,
@@ -11,11 +10,20 @@
 	} from '$lib/utils/fileSections';
 	import { SelectedOwnership } from '$lib/vbranches/ownership';
 	import { type Hunk } from '$lib/vbranches/types';
+	import { maybeGetContextStore } from '@gitbutler/shared/context';
 	import Checkbox from '@gitbutler/ui/Checkbox.svelte';
 	import Icon from '@gitbutler/ui/Icon.svelte';
 	import { pxToRem } from '@gitbutler/ui/utils/pxToRem';
 	import diff_match_patch from 'diff-match-patch';
 	import type { Writable } from 'svelte/store';
+
+	interface ContextMenuParams {
+		event: MouseEvent;
+		beforeLineNumber: number | undefined;
+		afterLineNumber: number | undefined;
+		hunk: Hunk;
+		subsection: ContentSection;
+	}
 
 	interface Props {
 		hunk: Hunk;
@@ -24,6 +32,7 @@
 		selectable: boolean;
 		subsections: ContentSection[];
 		tabSize: number;
+		wrapText: boolean;
 		diffFont: string;
 		diffLigatures: boolean;
 		inlineUnifiedDiffs: boolean;
@@ -31,17 +40,7 @@
 		draggingDisabled: boolean;
 		onclick: () => void;
 		handleSelected: (hunk: Hunk, isSelected: boolean) => void;
-		handleLineContextMenu: ({
-			event,
-			lineNumber,
-			hunk,
-			subsection
-		}: {
-			event: MouseEvent;
-			lineNumber: number;
-			hunk: Hunk;
-			subsection: ContentSection;
-		}) => void;
+		handleLineContextMenu: (params: ContextMenuParams) => void;
 	}
 
 	const {
@@ -51,6 +50,7 @@
 		selectable,
 		subsections,
 		tabSize,
+		wrapText,
 		diffFont,
 		diffLigatures,
 		inlineUnifiedDiffs,
@@ -327,7 +327,9 @@
 		class:is-before={side === CountColumnSide.Before}
 		class:selected={isSelected}
 		onclick={() => {
-			selectable && handleSelected(hunk, !isSelected);
+			if (selectable) {
+				handleSelected(hunk, !isSelected);
+			}
 		}}
 	>
 		{side === CountColumnSide.Before ? row.beforeLineNumber : row.afterLineNumber}
@@ -346,7 +348,9 @@
 			<thead class="table__title" class:draggable={!draggingDisabled}>
 				<tr
 					onclick={() => {
-						selectable && handleSelected(hunk, !isSelected);
+						if (selectable) {
+							handleSelected(hunk, !isSelected);
+						}
 					}}
 				>
 					<th
@@ -362,7 +366,9 @@
 									checked={isSelected}
 									small
 									onclick={() => {
-										selectable && handleSelected(hunk, !isSelected);
+										if (selectable) {
+											handleSelected(hunk, !isSelected);
+										}
 									}}
 								/>
 							{/if}
@@ -405,20 +411,18 @@
 						<td
 							{onclick}
 							class="table__textContent"
-							style="--tab-size: {tabSize};"
+							style="--tab-size: {tabSize}; --wrap: {wrapText ? 'wrap' : 'nowrap'}"
 							class:readonly
 							data-no-drag
 							class:diff-line-deletion={row.type === SectionType.RemovedLines}
 							class:diff-line-addition={row.type === SectionType.AddedLines}
 							class:is-last={row.isLast}
 							oncontextmenu={(event) => {
-								const lineNumber = (
-									row.beforeLineNumber ? row.beforeLineNumber : row.afterLineNumber
-								) as number;
 								handleLineContextMenu({
 									event,
 									hunk,
-									lineNumber,
+									beforeLineNumber: row.beforeLineNumber,
+									afterLineNumber: row.afterLineNumber,
 									subsection: subsections[0] as ContentSection
 								});
 							}}
@@ -585,6 +589,7 @@
 		text-align: center;
 		padding: 0 4px;
 		text-align: right;
+		vertical-align: top;
 		user-select: none;
 
 		position: sticky;
@@ -641,5 +646,6 @@
 		white-space: pre;
 		user-select: text;
 		cursor: text;
+		text-wrap: var(--wrap);
 	}
 </style>

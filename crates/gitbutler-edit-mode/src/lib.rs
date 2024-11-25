@@ -1,9 +1,10 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::{bail, Context, Result};
 use bstr::ByteSlice;
 use git2::build::CheckoutBuilder;
-use gitbutler_branch::{signature, Branch, SignaturePurpose, VirtualBranchesHandle};
 use gitbutler_branch_actions::internal::list_virtual_branches;
 use gitbutler_branch_actions::{update_workspace_commit, RemoteBranchFile};
 use gitbutler_cherry_pick::{ConflictedTreeKey, RepositoryExt as _};
@@ -19,45 +20,13 @@ use gitbutler_operating_modes::{
 };
 use gitbutler_project::access::{WorktreeReadPermission, WorktreeWritePermission};
 use gitbutler_reference::{ReferenceName, Refname};
-use gitbutler_repo::{
-    rebase::{cherry_rebase, cherry_rebase_group},
-    RepositoryExt,
-};
+use gitbutler_repo::{rebase::cherry_rebase, RepositoryExt};
+use gitbutler_repo::{signature, SignaturePurpose};
+use gitbutler_stack::{Stack, VirtualBranchesHandle};
+use gitbutler_workspace::{checkout_branch_trees, compute_updated_branch_head, BranchHeadAndTree};
+use serde::Serialize;
 
 pub mod commands;
-
-pub const EDIT_UNCOMMITED_FILES_REF: &str = "refs/gitbutler/edit_uncommited_files";
-
-fn save_uncommited_files(ctx: &CommandContext) -> Result<()> {
-    let repository = ctx.repository();
-
-    // Create a tree of all uncommited files
-    let tree = repository.create_wd_tree()?;
-
-    // Commit tree and reference it
-    let author_signature =
-        signature(SignaturePurpose::Author).context("Failed to get gitbutler signature")?;
-    let committer_signature =
-        signature(SignaturePurpose::Committer).context("Failed to get gitbutler signature")?;
-    let head = repository.head().context("Failed to get head")?;
-    let head_commit = head.peel_to_commit().context("Failed to get head commit")?;
-    let commit = repository
-        .commit(
-            None,
-            &author_signature,
-            &committer_signature,
-            "Edit mode saved changes",
-            &tree,
-            &[&head_commit],
-        )
-        .context("Failed to write stash commit")?;
-
-    repository
-        .reference(EDIT_UNCOMMITED_FILES_REF, commit, true, "")
-        .context("Failed to reference uncommited files")?;
-
-    Ok(())
-}
 
 fn get_commit_index(repository: &git2::Repository, commit: &git2::Commit) -> Result<git2::Index> {
     let commit_tree = commit.tree().context("Failed to get commit's tree")?;
@@ -107,7 +76,7 @@ fn checkout_edit_branch(ctx: &CommandContext, commit: &git2::Commit) -> Result<(
 
     // Checkout commits's parent
     let commit_parent = if commit.is_conflicted() {
-        let base_tree = repository.find_real_tree(commit, ConflictedTreeKey::Base)?;
+        let base_tree = repository.find_real_tree(commit, ConflictedTreeKey::Ours)?;
 
         let base = repository.commit(
             None,
@@ -144,13 +113,13 @@ fn checkout_edit_branch(ctx: &CommandContext, commit: &git2::Commit) -> Result<(
 fn find_virtual_branch_by_reference(
     ctx: &CommandContext,
     reference: &ReferenceName,
-) -> Result<Option<Branch>> {
+) -> Result<Option<Stack>> {
     let vb_state = VirtualBranchesHandle::new(ctx.project().gb_dir());
-    let all_virtual_branches = vb_state
-        .list_branches_in_workspace()
+    let all_stacks = vb_state
+        .list_stacks_in_workspace()
         .context("Failed to read virtual branches")?;
 
-    Ok(all_virtual_branches.into_iter().find(|virtual_branch| {
+    Ok(all_stacks.into_iter().find(|virtual_branch| {
         let Ok(refname) = virtual_branch.refname() else {
             return false;
         };
@@ -182,7 +151,6 @@ pub(crate) fn enter_edit_mode(
         bail!("Can not enter edit mode for a reference which does not have a cooresponding virtual branch")
     }
 
-    save_uncommited_files(ctx).context("Failed to save uncommited files")?;
     checkout_edit_branch(ctx, commit).context("Failed to checkout edit branch")?;
     write_edit_mode_metadata(ctx, &edit_mode_metadata).context("Failed to persist metadata")?;
 
@@ -191,36 +159,16 @@ pub(crate) fn enter_edit_mode(
 
 pub(crate) fn abort_and_return_to_workspace(
     ctx: &CommandContext,
-    _perm: &mut WorktreeWritePermission,
+    perm: &mut WorktreeWritePermission,
 ) -> Result<()> {
     let repository = ctx.repository();
 
     // Checkout gitbutler workspace branch
-    {
-        repository
-            .set_head(WORKSPACE_BRANCH_REF)
-            .context("Failed to set head reference")?;
-        repository
-            .checkout_head(Some(CheckoutBuilder::new().force().remove_untracked(true)))
-            .context("Failed to checkout gitbutler/workspace")?;
-    }
+    repository
+        .set_head(WORKSPACE_BRANCH_REF)
+        .context("Failed to set head reference")?;
 
-    // Checkout any stashed changes.
-    {
-        let stashed_workspace_changes_reference = repository
-            .find_reference(EDIT_UNCOMMITED_FILES_REF)
-            .context("Failed to find stashed workspace changes")?;
-        let stashed_workspace_changes_commit = stashed_workspace_changes_reference
-            .peel_to_commit()
-            .context("Failed to get stashed changes commit")?;
-
-        repository
-            .checkout_tree(
-                stashed_workspace_changes_commit.tree()?.as_object(),
-                Some(CheckoutBuilder::new().force().remove_untracked(true)),
-            )
-            .context("Failed to checkout workspace changes tree")?;
-    }
+    checkout_branch_trees(ctx, perm)?;
 
     Ok(())
 }
@@ -237,12 +185,6 @@ pub(crate) fn save_and_return_to_workspace(
     let commit = repository
         .find_commit(edit_mode_metadata.commit_oid)
         .context("Failed to find commit")?;
-    let stashed_workspace_changes_reference = repository
-        .find_reference(EDIT_UNCOMMITED_FILES_REF)
-        .context("Failed to find stashed workspace changes")?;
-    let stashed_workspace_changes_commit = stashed_workspace_changes_reference
-        .peel_to_commit()
-        .context("Failed to get stashed changes commit")?;
 
     let Some(mut virtual_branch) =
         find_virtual_branch_by_reference(ctx, &edit_mode_metadata.branch_reference)?
@@ -255,6 +197,7 @@ pub(crate) fn save_and_return_to_workspace(
     // Recommit commit
     let tree = repository.create_wd_tree()?;
 
+    let (_, committer) = repository.signatures()?;
     let commit_headers = commit
         .gitbutler_headers()
         .map(|commit_headers| CommitHeadersV2 {
@@ -266,7 +209,7 @@ pub(crate) fn save_and_return_to_workspace(
         .commit_with_signature(
             None,
             &commit.author(),
-            &commit.committer(),
+            &committer, // Use a new committer
             &commit.message_bstr().to_str_lossy(),
             &tree,
             &parents.iter().collect::<Vec<_>>(),
@@ -275,69 +218,43 @@ pub(crate) fn save_and_return_to_workspace(
         .context("Failed to commit new commit")?;
 
     // Rebase all all commits on top of the new commit and update reference
-    let new_branch_head = cherry_rebase(ctx, new_commit_oid, commit.id(), virtual_branch.head)
+    let new_branch_head = cherry_rebase(ctx, new_commit_oid, commit.id(), virtual_branch.head())
         .context("Failed to rebase commits onto new commit")?
         .unwrap_or(new_commit_oid);
+
+    // Update virtual_branch
+    let BranchHeadAndTree {
+        head: new_branch_head,
+        tree: new_branch_tree,
+    } = compute_updated_branch_head(repository, &virtual_branch, new_branch_head)?;
+
+    virtual_branch.set_stack_head(ctx, new_branch_head, Some(new_branch_tree))?;
+
+    // Switch branch to gitbutler/workspace
     repository
-        .reference(
-            &edit_mode_metadata.branch_reference,
-            new_branch_head,
-            true,
-            "",
-        )
-        .context("Failed to reference new commit branch head")?;
+        .set_head(WORKSPACE_BRANCH_REF)
+        .context("Failed to set head reference")?;
 
-    // Move back to gitbutler/workspace and restore stashed changes
-    {
-        repository
-            .set_head(WORKSPACE_BRANCH_REF)
-            .context("Failed to set head reference")?;
-        repository
-            .checkout_head(Some(CheckoutBuilder::new().force().remove_untracked(true)))
-            .context("Failed to checkout gitbutler/workspace")?;
-
-        virtual_branch.head = new_branch_head;
-        virtual_branch.updated_timestamp_ms = gitbutler_time::time::now_ms();
-        vb_state
-            .set_branch(virtual_branch)
-            .context("Failed to update vbstate")?;
-
-        let workspace_commit_oid = update_workspace_commit(&vb_state, ctx)
-            .context("Failed to update gitbutler workspace")?;
-
-        let rebased_stashed_workspace_changes_commit = cherry_rebase_group(
-            repository,
-            workspace_commit_oid,
-            &[stashed_workspace_changes_commit.id()],
-            true,
-        )
-        .context("Failed to rebase stashed workspace commit changes")?;
-
-        let commit_thing = repository
-            .find_commit(rebased_stashed_workspace_changes_commit)
-            .context("Failed to find commit of rebased stashed workspace changes commit oid")?;
-
-        let tree_thing = repository
-            .find_real_tree(&commit_thing, Default::default())
-            .context("Failed to get tree of commit of rebased stashed workspace changes")?;
-
-        repository
-            .checkout_tree(
-                tree_thing.as_object(),
-                Some(CheckoutBuilder::new().force().remove_untracked(true)),
-            )
-            .context("Failed to checkout stashed changes tree")?;
-
-        list_virtual_branches(ctx, perm).context("Failed to list virtual branches")?;
-    }
+    // Checkout the applied branches
+    checkout_branch_trees(ctx, perm)?;
+    update_workspace_commit(&vb_state, ctx)?;
+    list_virtual_branches(ctx, perm)?;
 
     Ok(())
+}
+
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictEntryPresence {
+    pub ours: bool,
+    pub theirs: bool,
+    pub ancestor: bool,
 }
 
 pub(crate) fn starting_index_state(
     ctx: &CommandContext,
     _perm: &WorktreeReadPermission,
-) -> Result<Vec<RemoteBranchFile>> {
+) -> Result<Vec<(RemoteBranchFile, Option<ConflictEntryPresence>)>> {
     let OperatingMode::Edit(metadata) = operating_mode(ctx) else {
         bail!("Starting index state can only be fetched while in edit mode")
     };
@@ -345,23 +262,44 @@ pub(crate) fn starting_index_state(
     let repository = ctx.repository();
 
     let commit = repository.find_commit(metadata.commit_oid)?;
-    let commit_parent = commit.parent(0)?;
-    let commit_parent_tree = repository.find_real_tree(&commit_parent, Default::default())?;
+    let commit_parent_tree = if commit.is_conflicted() {
+        repository.find_real_tree(&commit, ConflictedTreeKey::Ours)?
+    } else {
+        commit.parent(0)?.tree()?
+    };
 
     let index = get_commit_index(repository, &commit)?;
+
+    let conflicts = index
+        .conflicts()?
+        .filter_map(|conflict| {
+            let Ok(conflict) = conflict else {
+                return None;
+            };
+
+            let path = conflict
+                .ancestor
+                .as_ref()
+                .or(conflict.our.as_ref())
+                .or(conflict.their.as_ref())
+                .map(|entry| PathBuf::from(entry.path.to_str_lossy().to_string()))?;
+
+            Some((
+                path,
+                ConflictEntryPresence {
+                    ours: conflict.our.is_some(),
+                    theirs: conflict.their.is_some(),
+                    ancestor: conflict.ancestor.is_some(),
+                },
+            ))
+        })
+        .collect::<HashMap<PathBuf, ConflictEntryPresence>>();
 
     let diff = repository.diff_tree_to_index(Some(&commit_parent_tree), Some(&index), None)?;
 
     let diff_files = hunks_by_filepath(Some(repository), &diff)?
         .into_iter()
-        .map(|(path, file)| {
-            let binary = file.hunks.iter().any(|h| h.binary);
-            RemoteBranchFile {
-                path,
-                hunks: file.hunks,
-                binary,
-            }
-        })
+        .map(|(path, file)| (file.into(), conflicts.get(&path).cloned()))
         .collect();
 
     Ok(diff_files)

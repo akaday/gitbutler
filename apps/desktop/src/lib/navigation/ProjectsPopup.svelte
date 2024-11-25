@@ -1,10 +1,10 @@
 <script lang="ts">
-	import { ProjectService } from '$lib/backend/projects';
+	import { ProjectsService } from '$lib/backend/projects';
 	import ScrollableContainer from '$lib/scroll/ScrollableContainer.svelte';
-	import { getContext } from '$lib/utils/context';
-	import { resizeObserver } from '$lib/utils/resizeObserver';
+	import { getContext } from '@gitbutler/shared/context';
 	import Icon from '@gitbutler/ui/Icon.svelte';
 	import { portal } from '@gitbutler/ui/utils/portal';
+	import { resizeObserver } from '@gitbutler/ui/utils/resizeObserver';
 	import type iconsJson from '@gitbutler/ui/data/icons.json';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
@@ -24,8 +24,8 @@
 
 	const { target, isNavCollapsed }: ProjectsPopupProps = $props();
 
-	const projectService = getContext(ProjectService);
-	const projects = projectService.projects;
+	const projectsService = getContext(ProjectsService);
+	const projects = projectsService.projects;
 
 	let inputBoundingRect: DOMRect | undefined = $state();
 	let optionsEl: HTMLDivElement | undefined = $state();
@@ -64,6 +64,7 @@
 
 {#snippet itemSnippet(props: ItemSnippetProps)}
 	<button
+		type="button"
 		disabled={props.selected}
 		class="list-item"
 		class:selected={props.selected}
@@ -104,7 +105,7 @@
 				: undefined}
 			style:left={inputBoundingRect?.left ? `${inputBoundingRect.left}px` : undefined}
 		>
-			{#if $projects.length > 0}
+			{#if $projects && $projects.length > 0}
 				<ScrollableContainer maxHeight="20rem">
 					<div class="popup__projects">
 						{#each $projects as project}
@@ -117,7 +118,7 @@
 								icon: selected ? 'tick' : undefined,
 								onclick: async (event: any) => {
 									if (event.altKey) {
-										await projectService.openProjectInNewWindow(project.id);
+										await projectsService.openProjectInNewWindow(project.id);
 									} else {
 										goto(`/${project.id}/`);
 									}
@@ -136,7 +137,7 @@
 					onclick: async () => {
 						newProjectLoading = true;
 						try {
-							await projectService.addProject();
+							await projectsService.addProject();
 						} finally {
 							newProjectLoading = false;
 							hide();
@@ -198,6 +199,7 @@
 			transform: translateY(0);
 		}
 	}
+
 	.popup__actions {
 		padding: 8px;
 		border-top: 1px solid var(--clr-scale-ntrl-70);

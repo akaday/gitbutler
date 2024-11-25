@@ -20,5 +20,7 @@ gitbutler-reference.workspace = true
 gitbutler-time.workspace = true
 gitbutler-oplog.workspace = true
 gitbutler-diff.workspace = true
+gitbutler-stack.workspace = true
 gitbutler-cherry-pick.workspace = true
+gitbutler-workspace.workspace = true
 serde.workspace = true

@@ -1,36 +1,37 @@
 <script lang="ts">
 	import Tooltip from './Tooltip.svelte';
 	import Icon from '$lib/Icon.svelte';
+	import SeriesLabelsRow from '$lib/SeriesLabelsRow.svelte';
 	import TimeAgo from '$lib/TimeAgo.svelte';
 	import { onMount, type Snippet } from 'svelte';
 
 	interface Props {
 		onMouseDown?: () => void;
 		onFirstSeen?: () => void;
+		title?: string;
+		series?: string[];
 		selected?: boolean;
-		title: string;
 		applied?: boolean;
 		pullRequestDetails?: { title: string; draft: boolean };
 		lastCommitDetails?: { authorName: string; lastCommitAt?: Date };
 		branchDetails?: { commitCount: number; linesAdded: number; linesRemoved: number };
 		remotes?: string[];
 		local?: boolean;
-
 		authorAvatars: Snippet;
 	}
 
 	const {
 		onMouseDown = () => {},
 		onFirstSeen = () => {},
+		title,
+		series,
 		selected = false,
 		applied = false,
-		title,
 		pullRequestDetails,
 		lastCommitDetails,
 		branchDetails,
 		remotes = [],
 		local = false,
-
 		authorAvatars
 	}: Props = $props();
 
@@ -57,10 +58,22 @@
 	});
 </script>
 
-<button class="branch" class:selected onmousedown={onMouseDown} bind:this={intersectionTarget}>
-	<h4 class="text-13 text-semibold branch-name">
-		{title}
-	</h4>
+<button
+	type="button"
+	class="branch"
+	class:selected
+	onmousedown={onMouseDown}
+	bind:this={intersectionTarget}
+>
+	{#if series}
+		<SeriesLabelsRow {series} showCounterLabel {selected} />
+	{/if}
+
+	{#if title}
+		<h4 class="text-13 text-semibold branch-name">
+			{title}
+		</h4>
+	{/if}
 
 	<div class="row">
 		<div class="authors-and-tags">
@@ -125,8 +138,8 @@
 			{#if branchDetails}
 				<Tooltip text="Code changes">
 					<div class="code-changes">
-						<span class="text-10 text-semibold">+{branchDetails.linesAdded}</span>
-						<span class="text-10 text-semibold">-{branchDetails.linesRemoved}</span>
+						<span class="text-10 text-bold">+{branchDetails.linesAdded}</span>
+						<span class="text-10 text-bold">-{branchDetails.linesRemoved}</span>
 					</div>
 				</Tooltip>
 
@@ -144,7 +157,7 @@
 							<path d="M0.333374 4H3.66671" stroke="currentColor" stroke-width="1.5" />
 						</svg>
 
-						<span class="text-10 text-semibold">{branchDetails.commitCount}</span>
+						<span class="text-10 text-bold">{branchDetails.commitCount}</span>
 					</div>
 				</Tooltip>
 			{/if}
@@ -180,10 +193,15 @@
 			left: 0;
 			width: 4px;
 			height: 100%;
-			background-color: var(--clr-theme-pop-element);
 			transform: translateX(-100%);
-
 			transition: transform var(--transition-medium);
+		}
+
+		&:not(.selected):hover {
+			&::after {
+				background-color: var(--clr-scale-ntrl-60);
+				transform: translateX(0);
+			}
 		}
 	}
 
@@ -207,6 +225,7 @@
 		display: flex;
 		align-items: center;
 		gap: 6px;
+		overflow: hidden;
 	}
 
 	/* TAG */
@@ -224,8 +243,6 @@
 	.tag-local,
 	.tag-remote {
 		border: 1px solid var(--clr-border-2);
-		/* background-color: color-mix(in srgb, var(--clr-scale-ntrl-60), transparent 70%);
-		color: var(--clr-text-1); */
 	}
 
 	.tag-pr,
@@ -288,6 +305,7 @@
 	.branch-remotes {
 		display: flex;
 		gap: 4px;
+		overflow: hidden;
 	}
 
 	.branch-name {
@@ -302,18 +320,13 @@
 		color: var(--clr-scale-ntrl-50);
 	}
 
-	.branch:not(.selected):hover,
-	.branch:not(.selected):focus {
-		background-color: var(--clr-bg-1-muted);
-		transition: none;
-	}
-
 	/* MODIFIERS */
 
 	.selected {
-		background-color: var(--clr-bg-2);
+		background-color: var(--clr-bg-1-muted);
 
 		&::after {
+			background-color: var(--clr-theme-pop-element);
 			transform: translateX(0);
 		}
 	}

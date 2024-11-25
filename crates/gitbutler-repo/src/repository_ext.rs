@@ -1,14 +1,8 @@
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-use std::{io::Write, path::Path, process::Stdio, str};
-
-use crate::{Config, LogUntil};
+use crate::Config;
+use crate::SignaturePurpose;
 use anyhow::{anyhow, bail, Context, Result};
 use bstr::BString;
 use git2::{BlameOptions, StatusOptions, Tree};
-use gitbutler_branch::SignaturePurpose;
 use gitbutler_commit::commit_headers::CommitHeadersV2;
 use gitbutler_config::git::{GbConfig, GitConfig};
 use gitbutler_error::error::Code;
@@ -16,18 +10,40 @@ use gitbutler_oxidize::{
     git2_signature_to_gix_signature, git2_to_gix_object_id, gix_to_git2_oid, gix_to_git2_signature,
 };
 use gitbutler_reference::{Refname, RemoteRefname};
+use gix::filter::plumbing::pipeline::convert::ToGitOutcome;
 use gix::fs::is_executable;
+use gix::merge::tree::{Options, UnresolvedConflict};
 use gix::objs::WriteTo;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+use std::{io::Write, path::Path, process::Stdio, str};
 use tracing::instrument;
 
 /// Extension trait for `git2::Repository`.
 ///
 /// For now, it collects useful methods from `gitbutler-core::git::Repository`
 pub trait RepositoryExt {
+    fn find_branch_by_refname(&self, name: &Refname) -> Result<git2::Branch>;
+    /// Returns the common ancestor of the given commit Oids.
+    ///
+    /// This is like `git merge-base --octopus`.
+    ///
+    /// This method is called `merge_base_octopussy` so that it doesn't
+    /// conflict with the libgit2 binding I upstreamed when it eventually
+    /// gets merged.
+    fn merge_base_octopussy(&self, ids: &[git2::Oid]) -> Result<git2::Oid>;
     fn signatures(&self) -> Result<(git2::Signature, git2::Signature)>;
-    fn l(&self, from: git2::Oid, to: LogUntil) -> Result<Vec<git2::Oid>>;
+    fn l(&self, from: git2::Oid, to: LogUntil, include_all_parents: bool)
+        -> Result<Vec<git2::Oid>>;
     fn list_commits(&self, from: git2::Oid, to: git2::Oid) -> Result<Vec<git2::Commit>>;
-    fn log(&self, from: git2::Oid, to: LogUntil) -> Result<Vec<git2::Commit>>;
+    fn log(
+        &self,
+        from: git2::Oid,
+        to: LogUntil,
+        include_all_parents: bool,
+    ) -> Result<Vec<git2::Commit>>;
     /// Return `HEAD^{commit}` - ideal for obtaining the integration branch commit in open-workspace mode
     /// when it's clear that it's representing the current state.
     ///
@@ -52,10 +68,11 @@ pub trait RepositoryExt {
     /// Returns the computed signature.
     fn sign_buffer(&self, buffer: &[u8]) -> Result<BString>;
 
-    fn checkout_index_builder<'a>(&'a self, index: &'a mut git2::Index) -> CheckoutIndexBuilder;
+    fn checkout_index_builder<'a>(&'a self, index: &'a mut git2::Index)
+        -> CheckoutIndexBuilder<'a>;
     fn checkout_index_path_builder<P: AsRef<Path>>(&self, path: P) -> Result<()>;
-    fn checkout_tree_builder<'a>(&'a self, tree: &'a git2::Tree<'a>) -> CheckoutTreeBuidler;
-    fn find_branch_by_refname(&self, name: &Refname) -> Result<Option<git2::Branch>>;
+    fn checkout_tree_builder<'a>(&'a self, tree: &'a git2::Tree<'a>) -> CheckoutTreeBuidler<'a>;
+    fn maybe_find_branch_by_refname(&self, name: &Refname) -> Result<Option<git2::Branch>>;
     /// Based on the index, add all data similar to `git add .` and create a tree from it, which is returned.
     fn create_wd_tree(&self) -> Result<Tree>;
 
@@ -109,7 +126,10 @@ impl RepositoryExt for git2::Repository {
         Ok(repo)
     }
 
-    fn checkout_index_builder<'a>(&'a self, index: &'a mut git2::Index) -> CheckoutIndexBuilder {
+    fn checkout_index_builder<'a>(
+        &'a self,
+        index: &'a mut git2::Index,
+    ) -> CheckoutIndexBuilder<'a> {
         CheckoutIndexBuilder {
             index,
             repo: self,
@@ -127,7 +147,7 @@ impl RepositoryExt for git2::Repository {
 
         Ok(())
     }
-    fn checkout_tree_builder<'a>(&'a self, tree: &'a git2::Tree<'a>) -> CheckoutTreeBuidler {
+    fn checkout_tree_builder<'a>(&'a self, tree: &'a git2::Tree<'a>) -> CheckoutTreeBuidler<'a> {
         CheckoutTreeBuidler {
             tree,
             repo: self,
@@ -135,7 +155,7 @@ impl RepositoryExt for git2::Repository {
         }
     }
 
-    fn find_branch_by_refname(&self, name: &Refname) -> Result<Option<git2::Branch>> {
+    fn maybe_find_branch_by_refname(&self, name: &Refname) -> Result<Option<git2::Branch>> {
         let branch = self.find_branch(
             &name.simple_name(),
             match name {
@@ -152,6 +172,20 @@ impl RepositoryExt for git2::Repository {
         }
     }
 
+    fn find_branch_by_refname(&self, name: &Refname) -> Result<git2::Branch> {
+        let branch = self.find_branch(
+            &name.simple_name(),
+            match name {
+                Refname::Virtual(_) | Refname::Local(_) | Refname::Other(_) => {
+                    git2::BranchType::Local
+                }
+                Refname::Remote(_) => git2::BranchType::Remote,
+            },
+        )?;
+
+        Ok(branch)
+    }
+
     /// Note that this will add all untracked and modified files in the worktree to
     /// the object database, and create a tree from it.
     ///
@@ -161,6 +195,18 @@ impl RepositoryExt for git2::Repository {
     /// or if the HEAD branch has no commits
     #[instrument(level = tracing::Level::DEBUG, skip(self), err(Debug))]
     fn create_wd_tree(&self) -> Result<Tree> {
+        let gix_repo = gix::open_opts(
+            self.path(),
+            gix::open::Options::default().permissions(gix::open::Permissions {
+                config: gix::open::permissions::Config {
+                    // Whenever we deal with worktree filters, we'd want to have the installation configuration as well.
+                    git_binary: cfg!(windows),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        )?;
+        let (mut pipeline, index) = gix_repo.filter_pipeline(None)?;
         let mut tree_update_builder = git2::build::TreeUpdateBuilder::new();
 
         let worktree_path = self.workdir().context("Could not find worktree path")?;
@@ -186,6 +232,7 @@ impl RepositoryExt for git2::Repository {
         // | add                | modify            | upsert    |
         // | modify             | modify            | upsert    |
 
+        let mut buf = Vec::with_capacity(1024);
         for status_entry in &statuses {
             let status = status_entry.status();
             let path = status_entry.path().context("Failed to get path")?;
@@ -207,8 +254,22 @@ impl RepositoryExt for git2::Repository {
                     let blob = self.blob(path_str.as_bytes())?;
                     tree_update_builder.upsert(path, blob, git2::FileMode::Link);
                 } else {
-                    let file = std::fs::read(&file_path)?;
-                    let blob = self.blob(&file)?;
+                    let file_for_git =
+                        pipeline.convert_to_git(std::fs::File::open(&file_path)?, path, &index)?;
+                    let data = match file_for_git {
+                        ToGitOutcome::Unchanged(mut file) => {
+                            buf.clear();
+                            std::io::copy(&mut file, &mut buf)?;
+                            &buf
+                        }
+                        ToGitOutcome::Buffer(buf) => buf,
+                        ToGitOutcome::Process(mut read) => {
+                            buf.clear();
+                            std::io::copy(&mut read, &mut buf)?;
+                            &buf
+                        }
+                    };
+                    let blob_id = self.blob(data)?;
 
                     let file_type = if is_executable(&file_path.metadata()?) {
                         git2::FileMode::BlobExecutable
@@ -216,7 +277,7 @@ impl RepositoryExt for git2::Repository {
                         git2::FileMode::Blob
                     };
 
-                    tree_update_builder.upsert(path, blob, file_type);
+                    tree_update_builder.upsert(path, blob_id, file_type);
                 }
             }
         }
@@ -462,10 +523,20 @@ impl RepositoryExt for git2::Repository {
     }
 
     // returns a list of commit oids from the first oid to the second oid
-    fn l(&self, from: git2::Oid, to: LogUntil) -> Result<Vec<git2::Oid>> {
+    // if `include_all_parents` is true it will include commits from all sides of merge commits,
+    // otherwise, only the first parent of each commit is considered
+    fn l(
+        &self,
+        from: git2::Oid,
+        to: LogUntil,
+        include_all_parents: bool,
+    ) -> Result<Vec<git2::Oid>> {
         match to {
             LogUntil::Commit(oid) => {
                 let mut revwalk = self.revwalk().context("failed to create revwalk")?;
+                if !include_all_parents {
+                    revwalk.simplify_first_parent()?;
+                }
                 revwalk
                     .push(from)
                     .context(format!("failed to push {}", from))?;
@@ -478,6 +549,9 @@ impl RepositoryExt for git2::Repository {
             }
             LogUntil::Take(n) => {
                 let mut revwalk = self.revwalk().context("failed to create revwalk")?;
+                if !include_all_parents {
+                    revwalk.simplify_first_parent()?;
+                }
                 revwalk
                     .push(from)
                     .context(format!("failed to push {}", from))?;
@@ -488,6 +562,9 @@ impl RepositoryExt for git2::Repository {
             }
             LogUntil::When(cond) => {
                 let mut revwalk = self.revwalk().context("failed to create revwalk")?;
+                if !include_all_parents {
+                    revwalk.simplify_first_parent()?;
+                }
                 revwalk
                     .push(from)
                     .context(format!("failed to push {}", from))?;
@@ -506,6 +583,9 @@ impl RepositoryExt for git2::Repository {
             }
             LogUntil::End => {
                 let mut revwalk = self.revwalk().context("failed to create revwalk")?;
+                if !include_all_parents {
+                    revwalk.simplify_first_parent()?;
+                }
                 revwalk
                     .push(from)
                     .context(format!("failed to push {}", from))?;
@@ -519,15 +599,20 @@ impl RepositoryExt for git2::Repository {
 
     fn list_commits(&self, from: git2::Oid, to: git2::Oid) -> Result<Vec<git2::Commit>> {
         Ok(self
-            .l(from, LogUntil::Commit(to))?
+            .l(from, LogUntil::Commit(to), false)?
             .into_iter()
             .map(|oid| self.find_commit(oid))
             .collect::<Result<Vec<_>, _>>()?)
     }
 
     // returns a list of commits from the first oid to the second oid
-    fn log(&self, from: git2::Oid, to: LogUntil) -> Result<Vec<git2::Commit>> {
-        self.l(from, to)?
+    fn log(
+        &self,
+        from: git2::Oid,
+        to: LogUntil,
+        include_all_parents: bool,
+    ) -> Result<Vec<git2::Commit>> {
+        self.l(from, to, include_all_parents)?
             .into_iter()
             .map(|oid| self.find_commit(oid))
             .collect::<Result<Vec<_>, _>>()
@@ -550,12 +635,27 @@ impl RepositoryExt for git2::Repository {
             repo.committer()
                 .transpose()?
                 .map(gix_to_git2_signature)
-                .unwrap_or_else(|| gitbutler_branch::signature(SignaturePurpose::Committer))
+                .unwrap_or_else(|| crate::signature(SignaturePurpose::Committer))
         } else {
-            gitbutler_branch::signature(SignaturePurpose::Committer)
+            crate::signature(SignaturePurpose::Committer)
         }?;
 
         Ok((author, committer))
+    }
+
+    fn merge_base_octopussy(&self, ids: &[git2::Oid]) -> Result<git2::Oid> {
+        if ids.len() < 2 {
+            bail!("Merge base octopussy requires at least two commit ids to operate on");
+        };
+
+        let first_oid = ids[0];
+
+        let output = ids[1..].iter().try_fold(first_oid, |base, oid| {
+            self.merge_base(base, *oid)
+                .context("Failed to find merge base")
+        })?;
+
+        Ok(output)
     }
 }
 
@@ -627,6 +727,47 @@ pub trait GixRepositoryExt: Sized {
     /// Configure the repository for diff operations between trees.
     /// This means it needs an object cache relative to the amount of files in the repository.
     fn for_tree_diffing(self) -> Result<Self>;
+
+    /// Returns `true` if the merge between `our_tree` and `their_tree` is free of conflicts.
+    /// Conflicts entail content merges with conflict markers, or anything else that doesn't merge cleanly in the tree.
+    ///
+    /// # Important
+    ///
+    /// Make sure the repository is configured [`with_object_memory()`](gix::Repository::with_object_memory()).
+    fn merges_cleanly_compat(
+        &self,
+        ancestor_tree: git2::Oid,
+        our_tree: git2::Oid,
+        their_tree: git2::Oid,
+    ) -> Result<bool>;
+
+    /// Just like the above, but with `gix` types.
+    fn merges_cleanly(
+        &self,
+        ancestor_tree: gix::ObjectId,
+        our_tree: gix::ObjectId,
+        their_tree: gix::ObjectId,
+    ) -> Result<bool>;
+
+    /// Return default lable names when merging trees.
+    ///
+    /// Note that these should probably rather be branch names, but that's for another day.
+    fn default_merge_labels(&self) -> gix::merge::blob::builtin_driver::text::Labels<'static> {
+        gix::merge::blob::builtin_driver::text::Labels {
+            ancestor: Some("base".into()),
+            current: Some("ours".into()),
+            other: Some("theirs".into()),
+        }
+    }
+
+    /// Return options suitable for merging so that the merge stops immediately after the first conflict.
+    /// It also returns the conflict kind to use when checking for unresolved conflicts.
+    fn merge_options_fail_fast(
+        &self,
+    ) -> Result<(
+        gix::merge::tree::Options,
+        gix::merge::tree::UnresolvedConflict,
+    )>;
 }
 
 impl GixRepositoryExt for gix::Repository {
@@ -635,4 +776,60 @@ impl GixRepositoryExt for gix::Repository {
         self.object_cache_size_if_unset(bytes);
         Ok(self)
     }
+
+    fn merges_cleanly_compat(
+        &self,
+        ancestor_tree: git2::Oid,
+        our_tree: git2::Oid,
+        their_tree: git2::Oid,
+    ) -> Result<bool> {
+        self.merges_cleanly(
+            git2_to_gix_object_id(ancestor_tree),
+            git2_to_gix_object_id(our_tree),
+            git2_to_gix_object_id(their_tree),
+        )
+    }
+
+    fn merges_cleanly(
+        &self,
+        ancestor_tree: gix::ObjectId,
+        our_tree: gix::ObjectId,
+        their_tree: gix::ObjectId,
+    ) -> Result<bool> {
+        let (options, conflict_kind) = self.merge_options_fail_fast()?;
+        let merge_outcome = self
+            .merge_trees(
+                ancestor_tree,
+                our_tree,
+                their_tree,
+                Default::default(),
+                options,
+            )
+            .context("failed to merge trees")?;
+        Ok(!merge_outcome.has_unresolved_conflicts(conflict_kind))
+    }
+
+    fn merge_options_fail_fast(&self) -> Result<(Options, UnresolvedConflict)> {
+        let conflict_kind = gix::merge::tree::UnresolvedConflict::Renames;
+        let options = self
+            .tree_merge_options()?
+            .with_fail_on_conflict(Some(conflict_kind));
+        Ok((options, conflict_kind))
+    }
+}
+
+type OidFilter = dyn Fn(&git2::Commit) -> Result<bool>;
+
+/// Generally, all traversals will use no particular ordering, it's implementation defined in `git2`.
+pub enum LogUntil {
+    /// Traverse until one sees (or gets commits older than) the given commit.
+    /// Do not return that commit or anything older than that.
+    Commit(git2::Oid),
+    /// Traverse the given `n` commits.
+    Take(usize),
+    /// Traverse all commits until the given condition returns `false` for a commit.
+    /// Note that this commit-id will also be returned.
+    When(Box<OidFilter>),
+    /// Traverse the whole graph until it is exhausted.
+    End,
 }

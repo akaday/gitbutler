@@ -5,13 +5,13 @@
 	import WelcomeSigninAction from '$lib/components/WelcomeSigninAction.svelte';
 	import SettingsPage from '$lib/layout/SettingsPage.svelte';
 	import { showError } from '$lib/notifications/toasts';
-	import Spacer from '$lib/shared/Spacer.svelte';
-	import TextBox from '$lib/shared/TextBox.svelte';
 	import { UserService } from '$lib/stores/user';
-	import { getContext } from '$lib/utils/context';
 	import * as toasts from '$lib/utils/toasts';
+	import { getContext } from '@gitbutler/shared/context';
 	import Button from '@gitbutler/ui/Button.svelte';
 	import Modal from '@gitbutler/ui/Modal.svelte';
+	import Spacer from '@gitbutler/ui/Spacer.svelte';
+	import Textbox from '@gitbutler/ui/Textbox.svelte';
 	import { goto } from '$app/navigation';
 
 	const userService = getContext(UserService);
@@ -26,11 +26,11 @@
 
 	$: userPicture = $user?.picture;
 
-	let deleteConfirmationModal: Modal;
+	let deleteConfirmationModal: ReturnType<typeof Modal> | undefined;
 
 	$: if ($user && !loaded) {
 		loaded = true;
-		userService.getUser($user?.access_token).then((cloudUser) => {
+		userService.getUser().then((cloudUser) => {
 			cloudUser.github_access_token = $user?.github_access_token; // prevent overwriting with null
 			userService.setUser(cloudUser);
 		});
@@ -46,7 +46,7 @@
 		const picture = formData.get('picture') as File | undefined;
 
 		try {
-			const updatedUser = await userService.updateUser($user.access_token, {
+			const updatedUser = await userService.updateUser({
 				name: newName,
 				picture: picture
 			});
@@ -84,7 +84,7 @@
 			console.error(err);
 			showError('Failed to delete project', err);
 		} finally {
-			deleteConfirmationModal.close();
+			deleteConfirmationModal?.close();
 			isDeleting = false;
 		}
 	}
@@ -113,8 +113,8 @@
 
 				<div id="contact-info" class="contact-info">
 					<div class="contact-info__fields">
-						<TextBox label="Full name" bind:value={newName} required />
-						<TextBox label="Email" bind:value={$user.email} readonly />
+						<Textbox label="Full name" bind:value={newName} required />
+						<Textbox label="Email" bind:value={$user.email} readonly />
 					</div>
 
 					<Button type="submit" style="pop" kind="solid" loading={saving}>Update profile</Button>
@@ -145,7 +145,7 @@
 			Your code remains safe. it only clears the configuration.
 		</svelte:fragment>
 
-		<Button style="error" kind="soft" onclick={() => deleteConfirmationModal.show()}>
+		<Button style="error" kind="soft" onclick={() => deleteConfirmationModal?.show()}>
 			Remove projects…
 		</Button>
 

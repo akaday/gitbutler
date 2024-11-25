@@ -3,19 +3,34 @@
 	import { autoSelectBranchNameFeature } from '$lib/config/uiFeatureFlags';
 	import HunkDiff from '$lib/hunk/HunkDiff.svelte';
 	import SettingsPage from '$lib/layout/SettingsPage.svelte';
+	import Select from '$lib/select/Select.svelte';
+	import SelectItem from '$lib/select/SelectItem.svelte';
 	import ThemeSelector from '$lib/settings/ThemeSelector.svelte';
 	import {
 		SETTINGS,
 		type Settings,
-		type ScrollbarVisilitySettings
+		type ScrollbarVisilitySettings,
+		type CodeEditorSettings
 	} from '$lib/settings/userSettings';
 	import RadioButton from '$lib/shared/RadioButton.svelte';
-	import TextBox from '$lib/shared/TextBox.svelte';
-	import Toggle from '$lib/shared/Toggle.svelte';
-	import { getContextStoreBySymbol } from '$lib/utils/context';
 	import { type Hunk } from '$lib/vbranches/types';
+	import { getContextStoreBySymbol } from '@gitbutler/shared/context';
+	import Textbox from '@gitbutler/ui/Textbox.svelte';
+	import Toggle from '@gitbutler/ui/Toggle.svelte';
 	import type { ContentSection } from '$lib/utils/fileSections';
 	import type { Writable } from 'svelte/store';
+
+	const editorOptions: CodeEditorSettings[] = [
+		{ schemeIdentifer: 'vscodium', displayName: 'VSCodium' },
+		{ schemeIdentifer: 'vscode', displayName: 'VSCode' },
+		{ schemeIdentifer: 'vscode-insiders', displayName: 'VSCode Insiders' },
+		{ schemeIdentifer: 'windsurf', displayName: 'Windsurf' },
+		{ schemeIdentifer: 'zed', displayName: 'Zed' }
+	];
+	const editorOptionsForSelect = editorOptions.map((option) => ({
+		label: option.displayName,
+		value: option.schemeIdentifer
+	}));
 
 	const userSettings = getContextStoreBySymbol<Settings, Writable<Settings>>(SETTINGS);
 
@@ -61,7 +76,30 @@
 		<svelte:fragment slot="title">Theme</svelte:fragment>
 		<ThemeSelector {userSettings} />
 	</SectionCard>
-
+	<SectionCard orientation="row" centerAlign>
+		<svelte:fragment slot="title">Default code editor</svelte:fragment>
+		<svelte:fragment slot="actions">
+			<Select
+				value={$userSettings.defaultCodeEditor.schemeIdentifer}
+				options={editorOptionsForSelect}
+				onselect={(value) => {
+					const selected = editorOptions.find((option) => option.schemeIdentifer === value);
+					if (selected) {
+						userSettings.update((s) => ({ ...s, defaultCodeEditor: selected }));
+					}
+				}}
+			>
+				{#snippet itemSnippet({ item, highlighted })}
+					<SelectItem
+						selected={item.value === $userSettings.defaultCodeEditor.schemeIdentifer}
+						{highlighted}
+					>
+						{item.label}
+					</SelectItem>
+				{/snippet}
+			</Select>
+		</svelte:fragment>
+	</SectionCard>
 	<div class="stack-v">
 		<SectionCard centerAlign roundedBottom={false}>
 			<svelte:fragment slot="title">Diff preview</svelte:fragment>
@@ -73,6 +111,7 @@
 				selectable={false}
 				draggingDisabled
 				tabSize={$userSettings.tabSize}
+				wrapText={$userSettings.wrapText}
 				diffFont={$userSettings.diffFont}
 				diffLigatures={$userSettings.diffLigatures}
 				inlineUnifiedDiffs={$userSettings.inlineUnifiedDiffs}
@@ -90,14 +129,14 @@
 				>Sets the font for the diff view. The first font name is the default, others are fallbacks.
 			</svelte:fragment>
 			<svelte:fragment slot="actions">
-				<TextBox
+				<Textbox
 					wide
 					bind:value={$userSettings.diffFont}
 					required
-					on:change={(e) => {
+					onchange={(value: string) => {
 						userSettings.update((s) => ({
 							...s,
-							diffFont: e.detail
+							diffFont: value
 						}));
 					}}
 				/>
@@ -115,7 +154,7 @@
 				<Toggle
 					id="allowDiffLigatures"
 					checked={$userSettings.diffLigatures}
-					on:click={() => {
+					onclick={() => {
 						userSettings.update((s) => ({
 							...s,
 							diffLigatures: !$userSettings.diffLigatures
@@ -132,7 +171,7 @@
 			</svelte:fragment>
 
 			<svelte:fragment slot="actions">
-				<TextBox
+				<Textbox
 					type="number"
 					width={100}
 					textAlign="center"
@@ -140,13 +179,33 @@
 					minVal={1}
 					maxVal={8}
 					showCountActions
-					on:change={(e) => {
+					onchange={(value: string) => {
 						userSettings.update((s) => ({
 							...s,
-							tabSize: parseInt(e.detail) || $userSettings.tabSize
+							tabSize: parseInt(value) || $userSettings.tabSize
 						}));
 					}}
 					placeholder={$userSettings.tabSize.toString()}
+				/>
+			</svelte:fragment>
+		</SectionCard>
+
+		<SectionCard labelFor="wrapText" orientation="row" roundedTop={false} roundedBottom={false}>
+			<svelte:fragment slot="title">Text Wrap</svelte:fragment>
+			<svelte:fragment slot="caption">
+				Wrap text in the diff view once it hits the end of the viewport.
+			</svelte:fragment>
+
+			<svelte:fragment slot="actions">
+				<Toggle
+					id="wrapText"
+					checked={$userSettings.wrapText}
+					onclick={() => {
+						userSettings.update((s) => ({
+							...s,
+							wrapText: !s.wrapText
+						}));
+					}}
 				/>
 			</svelte:fragment>
 		</SectionCard>
@@ -161,7 +220,7 @@
 				<Toggle
 					id="inlineUnifiedDiffs"
 					checked={$userSettings.inlineUnifiedDiffs}
-					on:click={() => {
+					onclick={() => {
 						userSettings.update((s) => ({
 							...s,
 							inlineUnifiedDiffs: !s.inlineUnifiedDiffs
@@ -222,16 +281,15 @@
 	</form>
 
 	<SectionCard labelFor="branchLaneContents" orientation="row">
-		<svelte:fragment slot="title">Auto-highlight Branch Lane Contents</svelte:fragment>
+		<svelte:fragment slot="title">Auto-select text on branch/lane rename</svelte:fragment>
 		<svelte:fragment slot="caption">
-			An experimental UI toggle to highlight the contents of the branch lane input fields when
-			clicking into them.
+			Enable this option to automatically select the text when the input is focused.
 		</svelte:fragment>
 		<svelte:fragment slot="actions">
 			<Toggle
 				id="branchLaneContents"
 				checked={$autoSelectBranchNameFeature}
-				on:click={() => ($autoSelectBranchNameFeature = !$autoSelectBranchNameFeature)}
+				onclick={() => ($autoSelectBranchNameFeature = !$autoSelectBranchNameFeature)}
 			/>
 		</svelte:fragment>
 	</SectionCard>

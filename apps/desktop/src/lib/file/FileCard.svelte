@@ -2,9 +2,9 @@
 	import FileCardHeader from './FileCardHeader.svelte';
 	import FileDiff from './FileDiff.svelte';
 	import ScrollableContainer from '$lib/scroll/ScrollableContainer.svelte';
-	import { getContext } from '$lib/utils/context';
 	import { ContentSection, HunkSection, parseFileSections } from '$lib/utils/fileSections';
 	import { BranchController } from '$lib/vbranches/branchController';
+	import { getContext } from '@gitbutler/shared/context';
 	import type { AnyFile } from '$lib/vbranches/types';
 
 	interface Props {
@@ -51,6 +51,7 @@
 	{#if conflicted}
 		<div class="file-card__resolved-btn">
 			<button
+				type="button"
 				class="font-bold text-white"
 				onclick={async () => await branchController.markResolved(file.path)}
 			>

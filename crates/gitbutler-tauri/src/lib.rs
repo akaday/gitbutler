@@ -24,6 +24,7 @@ pub use window::state::WindowState;
 pub mod askpass;
 pub mod config;
 pub mod error;
+pub mod forge;
 pub mod github;
 pub mod modes;
 pub mod open;
@@ -35,5 +36,6 @@ pub mod undo;
 pub mod users;
 pub mod virtual_branches;
 
+pub mod settings;
 pub mod stack;
 pub mod zip;

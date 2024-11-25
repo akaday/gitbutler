@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ProjectService, type Key, type KeyType, Project } from '$lib/backend/projects';
+	import { ProjectsService, type Key, type KeyType, Project } from '$lib/backend/projects';
 	import { BaseBranch } from '$lib/baseBranch/baseBranch';
 	import SectionCard from '$lib/components/SectionCard.svelte';
 	import { showError } from '$lib/notifications/toasts';
@@ -8,14 +8,14 @@
 	import Link from '$lib/shared/Link.svelte';
 	import ProjectNameLabel from '$lib/shared/ProjectNameLabel.svelte';
 	import RadioButton from '$lib/shared/RadioButton.svelte';
-	import TextBox from '$lib/shared/TextBox.svelte';
-	import { getContext, getContextStore } from '$lib/utils/context';
+	import { getContext, getContextStore } from '@gitbutler/shared/context';
+	import Textbox from '@gitbutler/ui/Textbox.svelte';
 	import { onMount } from 'svelte';
 
 	const project = getContext(Project);
 
 	const baseBranch = getContextStore(BaseBranch);
-	const projectService = getContext(ProjectService);
+	const projectsService = getContext(ProjectsService);
 
 	// Used by credential checker before target branch set
 	export let remoteName = '';
@@ -45,7 +45,7 @@
 	async function updateKey(detail: { preferred_key: Key }) {
 		try {
 			project.preferred_key = detail.preferred_key;
-			projectService.updateProject(project);
+			projectsService.updateProject(project);
 		} catch (err: any) {
 			showError('Failed to update key', err);
 		}
@@ -125,7 +125,7 @@
 		{#if selectedType === 'local'}
 			<SectionCard topDivider roundedTop={false} roundedBottom={false} orientation="row">
 				<div class="inputs-group">
-					<TextBox
+					<Textbox
 						label="Path to private key"
 						placeholder="for example: ~/.ssh/id_rsa"
 						bind:value={privateKeyPath}

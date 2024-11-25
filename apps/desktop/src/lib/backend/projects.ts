@@ -1,11 +1,12 @@
 import { invoke } from '$lib/backend/ipc';
 import { showError } from '$lib/notifications/toasts';
-import { persisted } from '$lib/persisted/persisted';
+import { sleep } from '$lib/utils/sleep';
 import * as toasts from '$lib/utils/toasts';
-import { open } from '@tauri-apps/api/dialog';
+import { persisted } from '@gitbutler/shared/persisted';
+import { open } from '@tauri-apps/plugin-dialog';
 import { plainToInstance } from 'class-transformer';
-import { get, writable } from 'svelte/store';
-import type { HttpClient } from './httpClient';
+import { derived, get, writable, type Readable } from 'svelte/store';
+import type { HttpClient } from '@gitbutler/shared/httpClient';
 import { goto } from '$app/navigation';
 
 export type KeyType = 'gitCredentialsHelper' | 'local' | 'systemExecutable';
@@ -26,20 +27,7 @@ export class Project {
 	omit_certificate_check: boolean | undefined;
 	use_diff_context: boolean | undefined;
 	snapshot_lines_threshold!: number | undefined;
-	use_new_locking!: boolean;
-	git_host!: {
-		hostType: 'github' | 'gitlab' | 'bitbucket' | 'azure';
-		pullRequestTemplatePath: string;
-	};
-
-	private succeeding_rebases!: boolean;
-	get succeedingRebases() {
-		return this.succeeding_rebases;
-	}
-	set succeedingRebases(value) {
-		this.succeeding_rebases = value;
-	}
-
+	use_new_branch_integration_algorithm: boolean | undefined;
 	// Produced just for the frontend to determine if the project is open in any window.
 	is_open!: boolean;
 
@@ -57,18 +45,20 @@ export type CloudProject = {
 	updated_at: string;
 };
 
-export class ProjectService {
+export class ProjectsService {
 	private persistedId = persisted<string | undefined>(undefined, 'lastProject');
-	readonly projects = writable<Project[]>([], (set) => {
-		this.loadAll()
-			.then((projects) => {
-				this.error.set(undefined);
-				set(projects);
-			})
-			.catch((err) => {
-				this.error.set(err);
-				showError('Failed to load projects', err);
-			});
+	readonly projects = writable<Project[] | undefined>(undefined, (set) => {
+		sleep(100).then(() => {
+			this.loadAll()
+				.then((projects) => {
+					this.error.set(undefined);
+					set(projects);
+				})
+				.catch((err) => {
+					this.error.set(err);
+					showError('Failed to load projects', err);
+				});
+		});
 	});
 	readonly error = writable();
 
@@ -87,6 +77,18 @@ export class ProjectService {
 
 	async getProject(projectId: string, noValidation?: boolean) {
 		return plainToInstance(Project, await invoke('get_project', { id: projectId, noValidation }));
+	}
+
+	#projectStores = new Map<string, Readable<Project | undefined>>();
+	getProjectStore(projectId: string) {
+		let store = this.#projectStores.get(projectId);
+		if (store) return store;
+
+		store = derived(this.projects, (projects) => {
+			return projects?.find((p) => p.id === projectId);
+		});
+		this.#projectStores.set(projectId, store);
+		return store;
 	}
 
 	async updateProject(project: Project) {
@@ -188,22 +190,17 @@ export class ProjectService {
 		this.persistedId.set(projectId);
 	}
 
-	async createCloudProject(
-		token: string,
-		params: {
-			name: string;
-			description?: string;
-			uid?: string;
-		}
-	): Promise<CloudProject> {
+	async createCloudProject(params: {
+		name: string;
+		description?: string;
+		uid?: string;
+	}): Promise<CloudProject> {
 		return await this.httpClient.post('projects.json', {
-			body: params,
-			token
+			body: params
 		});
 	}
 
 	async updateCloudProject(
-		token: string,
 		repositoryId: string,
 		params: {
 			name: string;
@@ -211,14 +208,32 @@ export class ProjectService {
 		}
 	): Promise<CloudProject> {
 		return await this.httpClient.put(`projects/${repositoryId}.json`, {
-			body: params,
-			token
+			body: params
 		});
 	}
 
-	async getCloudProject(token: string, repositoryId: string): Promise<CloudProject> {
-		return await this.httpClient.get(`projects/${repositoryId}.json`, {
-			token
+	async getCloudProject(repositoryId: string): Promise<CloudProject> {
+		return await this.httpClient.get(`projects/${repositoryId}.json`);
+	}
+}
+
+/**
+ * Provides a store to an individual proejct
+ *
+ * Its preferable to use this service over the static Project context.
+ */
+export class ProjectService {
+	project: Readable<Project | undefined>;
+	cloudEnabled: Readable<boolean>;
+
+	constructor(
+		projectsService: ProjectsService,
+		readonly projectId: string
+	) {
+		this.project = projectsService.getProjectStore(projectId);
+
+		this.cloudEnabled = derived(this.project, (project) => {
+			return !!project?.api?.sync;
 		});
 	}
 }

@@ -1,23 +1,23 @@
 <script lang="ts">
 	import { invoke } from '$lib/backend/ipc';
-	import { ProjectService } from '$lib/backend/projects';
-	import { persisted } from '$lib/persisted/persisted';
+	import { ProjectsService } from '$lib/backend/projects';
 	import Section from '$lib/settings/Section.svelte';
 	import InfoMessage, { type MessageStyle } from '$lib/shared/InfoMessage.svelte';
-	import Spacer from '$lib/shared/Spacer.svelte';
-	import TextBox from '$lib/shared/TextBox.svelte';
 	import { parseRemoteUrl } from '$lib/url/gitUrl';
-	import { getContext } from '$lib/utils/context';
+	import { getContext } from '@gitbutler/shared/context';
+	import { persisted } from '@gitbutler/shared/persisted';
 	import Button from '@gitbutler/ui/Button.svelte';
+	import Spacer from '@gitbutler/ui/Spacer.svelte';
+	import Textbox from '@gitbutler/ui/Textbox.svelte';
 	import * as Sentry from '@sentry/sveltekit';
-	import { open } from '@tauri-apps/api/dialog';
 	import { documentDir } from '@tauri-apps/api/path';
 	import { join } from '@tauri-apps/api/path';
+	import { open } from '@tauri-apps/plugin-dialog';
 	import { posthog } from 'posthog-js';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 
-	const projectService = getContext(ProjectService);
+	const projectsService = getContext(ProjectsService);
 
 	let loading = $state(false);
 	let errors = $state<{ label: string }[]>([]);
@@ -74,7 +74,7 @@
 			});
 
 			posthog.capture('Repository Cloned', { protocol: remoteUrl.protocol });
-			await projectService.addProject(targetDir);
+			await projectsService.addProject(targetDir);
 		} catch (e) {
 			Sentry.captureException(e);
 			posthog.capture('Repository Clone Failure', { error: String(e) });
@@ -99,11 +99,11 @@
 <Section>
 	<div class="clone__field repositoryUrl">
 		<div class="text-13 text-semibold clone__field--label">Clone URL</div>
-		<TextBox bind:value={repositoryUrl} />
+		<Textbox bind:value={repositoryUrl} />
 	</div>
 	<div class="clone__field repositoryTargetPath">
 		<div class="text-13 text-semibold clone__field--label">Where to clone</div>
-		<TextBox bind:value={targetDirPath} placeholder={'/Users/tipsy/Documents'} />
+		<Textbox bind:value={targetDirPath} placeholder={'/Users/tipsy/Documents'} />
 		<Button style="ghost" outline kind="solid" disabled={loading} onclick={handleCloneTargetSelect}>
 			Choose..
 		</Button>

@@ -1,8 +1,14 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
+
+	const { title, children }: { title?: string; children: Snippet } = $props();
 </script>
 
 <div class="context-menu-section">
-	<slot />
+	{#if title}
+		<div class="context-menu-section__title text-12 text-semibold">{title}</div>
+	{/if}
+	{@render children()}
 </div>
 
 <style lang="postcss">
@@ -16,5 +22,11 @@
 		&:not(:first-child) {
 			border-top: 1px solid var(--clr-border-2);
 		}
+	}
+
+	.context-menu-section__title {
+		padding: 8px 8px 6px;
+		color: var(--clr-text-3);
+		user-select: none;
 	}
 </style>

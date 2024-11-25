@@ -20,6 +20,7 @@
 </script>
 
 <button
+	type="button"
 	role="tab"
 	tabindex={isActive ? -1 : 0}
 	aria-selected={isActive}
@@ -31,7 +32,7 @@
 	class:disabled
 	class:active={isActive}
 >
-	<span class="text-12 segment-control-item__label">
+	<span class="text-12 text-semibold segment-control-item__label">
 		{@render children()}
 	</span>
 </button>

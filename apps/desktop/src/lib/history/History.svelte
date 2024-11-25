@@ -1,18 +1,18 @@
 <script lang="ts">
-	import EmptyStatePlaceholder from '../components/EmptyStatePlaceholder.svelte';
 	import FullviewLoading from '../components/FullviewLoading.svelte';
 	import LazyloadContainer from '../shared/LazyloadContainer.svelte';
 	import emptyFolderSvg from '$lib/assets/empty-state/empty-folder.svg?raw';
 	import { Project } from '$lib/backend/projects';
-	import { clickOutside } from '$lib/clickOutside';
 	import FileCard from '$lib/file/FileCard.svelte';
 	import SnapshotCard from '$lib/history/SnapshotCard.svelte';
 	import { HistoryService, createdOnDay } from '$lib/history/history';
 	import ScrollableContainer from '$lib/scroll/ScrollableContainer.svelte';
-	import { getContext } from '$lib/utils/context';
 	import { RemoteFile } from '$lib/vbranches/types';
+	import { getContext } from '@gitbutler/shared/context';
 	import Button from '@gitbutler/ui/Button.svelte';
+	import EmptyStatePlaceholder from '@gitbutler/ui/EmptyStatePlaceholder.svelte';
 	import Icon from '@gitbutler/ui/Icon.svelte';
+	import { clickOutside } from '@gitbutler/ui/utils/clickOutside';
 	import { plainToInstance } from 'class-transformer';
 	import { createEventDispatcher } from 'svelte';
 	import type { Snapshot, SnapshotDiff } from '$lib/history/types';
@@ -75,11 +75,15 @@
 		| { entryId: string; diffs: { [key: string]: SnapshotDiff } }
 		| undefined = undefined;
 	let selectedFile: { entryId: string; path: string } | undefined = undefined;
+
+	$: withinRestoreItems = findRestorationRanges($snapshots);
 </script>
 
 <svelte:window
 	on:keydown={(e) => {
-		e.key === 'Escape' && dispatch('hide');
+		if (e.key === 'Escape') {
+			dispatch('hide');
+		}
 	}}
 />
 
@@ -107,7 +111,7 @@
 		{/if}
 
 		<div class="sideview">
-			<div class="sideview__header" data-tauri-drag-region>
+			<div class="sideview__header">
 				<i class="clock-icon">
 					<div class="clock-pointers">
 						<div class="clock-pointer clock-pointer-minute"></div>
@@ -126,12 +130,14 @@
 
 			<!-- EMPTY STATE -->
 			{#if $snapshots.length === 0 && !$loading}
-				<EmptyStatePlaceholder image={emptyFolderSvg}>
-					<svelte:fragment slot="title">No snapshots yet</svelte:fragment>
-					<svelte:fragment slot="caption">
+				<EmptyStatePlaceholder image={emptyFolderSvg} bottomMargin={48}>
+					{#snippet title()}
+						No snapshots yet
+					{/snippet}
+					{#snippet caption()}
 						Gitbutler saves your work, including file changes, so your progress is always secure.
 						Adjust snapshot settings in project settings.
-					</svelte:fragment>
+					{/snippet}
 				</EmptyStatePlaceholder>
 			{/if}
 
@@ -148,12 +154,10 @@
 						<LazyloadContainer
 							minTriggerCount={30}
 							ontrigger={() => {
-								console.log('load more snapshots…');
 								onLastInView();
 							}}
 						>
 							{#each $snapshots as entry, idx (entry.id)}
-								{@const withinRestoreItems = findRestorationRanges($snapshots)}
 								{#if idx === 0 || createdOnDay(entry.createdAt) !== createdOnDay($snapshots[idx - 1]?.createdAt ?? new Date())}
 									<div class="sideview__date-header">
 										<h4 class="text-13 text-semibold">
@@ -229,7 +233,7 @@
 
 <style lang="postcss">
 	.sideview-container {
-		z-index: var(--z-floating);
+		z-index: var(--z-modal);
 		position: fixed;
 		top: 0;
 		right: 0;

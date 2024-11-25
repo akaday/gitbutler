@@ -12,10 +12,10 @@
 	import Section from '$lib/settings/Section.svelte';
 	import InfoMessage from '$lib/shared/InfoMessage.svelte';
 	import RadioButton from '$lib/shared/RadioButton.svelte';
-	import Spacer from '$lib/shared/Spacer.svelte';
-	import TextBox from '$lib/shared/TextBox.svelte';
 	import { UserService } from '$lib/stores/user';
-	import { getContext } from '$lib/utils/context';
+	import { getContext } from '@gitbutler/shared/context';
+	import Spacer from '@gitbutler/ui/Spacer.svelte';
+	import Textbox from '@gitbutler/ui/Textbox.svelte';
 	import { onMount, tick } from 'svelte';
 
 	const gitConfigService = getContext(GitConfigService);
@@ -196,7 +196,7 @@
 					{/if}
 
 					{#if openAIKeyOption === KeyOption.BringYourOwn}
-						<TextBox label="API key" bind:value={openAIKey} required placeholder="sk-..." />
+						<Textbox label="API key" bind:value={openAIKey} required placeholder="sk-..." />
 
 						<Select
 							value={openAIModelName}
@@ -260,7 +260,7 @@
 					{/if}
 
 					{#if anthropicKeyOption === KeyOption.BringYourOwn}
-						<TextBox
+						<Textbox
 							label="API key"
 							bind:value={anthropicKey}
 							required
@@ -301,13 +301,13 @@
 		{#if modelKind === ModelKind.Ollama}
 			<SectionCard roundedTop={false} orientation="row" topDivider>
 				<div class="inputs-group">
-					<TextBox
+					<Textbox
 						label="Endpoint"
 						bind:value={ollamaEndpoint}
 						placeholder="http://127.0.0.1:11434"
 					/>
 
-					<TextBox label="Model" bind:value={ollamaModel} placeholder="llama3" />
+					<Textbox label="Model" bind:value={ollamaModel} placeholder="llama3" />
 				</div>
 			</SectionCard>
 		{/if}
@@ -321,14 +321,14 @@
 			How many characters of your git diff should be provided to AI
 		</svelte:fragment>
 		<svelte:fragment slot="actions">
-			<TextBox
+			<Textbox
 				type="number"
 				width={80}
 				textAlign="center"
 				value={diffLengthLimit?.toString()}
 				minVal={100}
-				on:input={(e) => {
-					diffLengthLimit = parseInt(e.detail);
+				oninput={(value: string) => {
+					diffLengthLimit = parseInt(value);
 				}}
 				placeholder="5000"
 			/>
@@ -342,6 +342,7 @@
 		<svelte:fragment slot="description">
 			GitButler's AI assistant generates commit messages and branch names. Use default prompts or
 			create your own. Assign prompts in the <button
+				type="button"
 				class="link"
 				on:click={() => console.log('got to project settings')}>project settings</button
 			>.

@@ -1,9 +1,9 @@
 <script lang="ts">
 	import ContextMenuItem from '$lib/components/contextmenu/ContextMenuItem.svelte';
 	import ContextMenuSection from '$lib/components/contextmenu/ContextMenuSection.svelte';
-	import { MergeMethod } from '$lib/gitHost/interface/types';
-	import { persisted, type Persisted } from '$lib/persisted/persisted';
+	import { MergeMethod } from '$lib/forge/interface/types';
 	import DropDownButton from '$lib/shared/DropDownButton.svelte';
+	import { persisted, type Persisted } from '@gitbutler/shared/persisted';
 	import { createEventDispatcher } from 'svelte';
 
 	export let projectId: string;
@@ -20,7 +20,7 @@
 	const dispatch = createEventDispatcher<{ click: { method: MergeMethod } }>();
 	const action = persistedAction(projectId);
 
-	let dropDown: DropDownButton;
+	let dropDown: ReturnType<typeof DropDownButton> | undefined;
 
 	const labels = {
 		[MergeMethod.Merge]: 'Merge pull request',
@@ -47,9 +47,9 @@
 			{#each Object.values(MergeMethod) as method}
 				<ContextMenuItem
 					label={labels[method]}
-					on:click={() => {
+					onclick={() => {
 						$action = method;
-						dropDown.close();
+						dropDown?.close();
 					}}
 				/>
 			{/each}

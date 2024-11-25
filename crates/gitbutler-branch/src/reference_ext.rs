@@ -15,7 +15,7 @@ pub trait ReferenceExt {
     ///
     /// An ideal implementation wouldn't require us to list all the references,
     /// but there doesn't seem to be a libgit2 solution to this.
-    fn given_name(&self, remotes: &git2::string_array::StringArray) -> Result<String>;
+    fn given_name(&self, remotes: &[&str]) -> Result<String>;
 }
 
 // TODO(ST): replace the original with this one.
@@ -31,8 +31,8 @@ pub trait ReferenceExtGix {
     fn identity(&self, remotes: &BTreeSet<Cow<'_, BStr>>) -> Result<BranchIdentity>;
 }
 
-impl<'repo> ReferenceExt for git2::Reference<'repo> {
-    fn given_name(&self, remotes: &git2::string_array::StringArray) -> Result<String> {
+impl ReferenceExt for git2::Reference<'_> {
+    fn given_name(&self, remotes: &[&str]) -> Result<String> {
         if self.is_remote() {
             let shorthand_name = self
                 .shorthand()
@@ -40,9 +40,8 @@ impl<'repo> ReferenceExt for git2::Reference<'repo> {
 
             let longest_remote = remotes
                 .iter()
-                .flatten()
                 .sorted_by_key(|remote_name| -(remote_name.len() as i32))
-                .find(|reference_name| shorthand_name.starts_with(reference_name))
+                .find(|reference_name| shorthand_name.starts_with(*reference_name))
                 .ok_or(anyhow::anyhow!(
                     "Failed to find remote branch's corresponding remote"
                 ))?;

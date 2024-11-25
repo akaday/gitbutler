@@ -1,4 +1,4 @@
-import { remoteUrlIsHttp, convertRemoteToWebUrl } from '$lib/utils/url';
+import { convertRemoteToWebUrl, getEditorUri } from '$lib/utils/url';
 import { describe, expect, test } from 'vitest';
 
 describe.concurrent('cleanUrl', () => {
@@ -25,20 +25,72 @@ describe.concurrent('cleanUrl', () => {
 			'https://github.com/user/repo'
 		);
 	});
+});
 
-	const httpRemoteUrls = ['https://github.com/user/repo.git', 'http://192.168.1.1/user/repo.git'];
-
-	test.each(httpRemoteUrls)('HTTP Remote - %s', (remoteUrl) => {
-		expect(remoteUrlIsHttp(remoteUrl)).toBe(true);
+describe.concurrent('getEditorUri', () => {
+	test('it should handle editor path with no search params', () => {
+		expect(getEditorUri({ schemeId: 'vscode', path: ['/path', 'to', 'file'] })).toEqual(
+			'vscode://file/path/to/file'
+		);
 	});
 
-	const nonHttpRemoteUrls = [
-		'git@github.com:user/repo.git',
-		'ssh://git@github.com:22/user/repo.git',
-		'git://github.com/user/repo.git'
-	];
+	test('it should handle editor path with search params', () => {
+		expect(
+			getEditorUri({
+				schemeId: 'vscode',
+				path: ['/path', 'to', 'file'],
+				searchParams: { something: 'cool' }
+			})
+		).toEqual('vscode://file/path/to/file?something=cool');
+	});
 
-	test.each(nonHttpRemoteUrls)('Non HTTP Remote - %s', (remoteUrl) => {
-		expect(remoteUrlIsHttp(remoteUrl)).toBe(false);
+	test('it should handle editor path with search params with special characters', () => {
+		expect(
+			getEditorUri({
+				schemeId: 'vscode',
+				path: ['/path', 'to', 'file'],
+				searchParams: {
+					search: 'hello world',
+					what: 'bye-&*%*\\ded-yeah'
+				}
+			})
+		).toEqual('vscode://file/path/to/file?search=hello+world&what=bye-%26*%25*%5Cded-yeah');
+	});
+
+	test('it should handle editor path with search params with line number', () => {
+		expect(
+			getEditorUri({
+				schemeId: 'vscode',
+				path: ['/path', 'to', 'file'],
+				line: 10
+			})
+		).toEqual('vscode://file/path/to/file:10');
+	});
+
+	test('it should handle editor path with search params with line and column number', () => {
+		expect(
+			getEditorUri({
+				schemeId: 'vscode',
+				path: ['/path', 'to', 'file'],
+				searchParams: {
+					another: 'thing'
+				},
+				line: 10,
+				column: 20
+			})
+		).toEqual('vscode://file/path/to/file:10:20?another=thing');
+	});
+
+	test('it should ignore the column if there is no line number', () => {
+		expect(
+			getEditorUri({
+				schemeId: 'vscode',
+				path: ['/path', 'to', 'file'],
+				searchParams: {
+					another: 'thing'
+				},
+				column: 20
+			})
+		).toEqual('vscode://file/path/to/file?another=thing');
 	});
 });

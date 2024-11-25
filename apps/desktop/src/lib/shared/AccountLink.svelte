@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { User } from '$lib/stores/user';
-	import { getContextStore } from '$lib/utils/context';
+	import { getContextStore } from '@gitbutler/shared/context';
 	import Icon from '@gitbutler/ui/Icon.svelte';
 	import { goto } from '$app/navigation';
 
@@ -11,6 +11,7 @@
 </script>
 
 <button
+	type="button"
 	class="btn"
 	class:pop
 	on:click={async () => await goto('/settings/')}

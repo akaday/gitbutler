@@ -2,14 +2,14 @@
 	import GroupHeader from './GroupHeader.svelte';
 	import noBranchesSvg from '$lib/assets/empty-state/no-branches.svg?raw';
 	import { CombinedBranchListingService } from '$lib/branches/branchListing';
-	import EmptyStatePlaceholder from '$lib/components/EmptyStatePlaceholder.svelte';
 	import BranchListingSidebarEntry from '$lib/navigation/BranchListingSidebarEntry.svelte';
 	import ChunkyList from '$lib/navigation/ChunkyList.svelte';
 	import PullRequestSidebarEntry from '$lib/navigation/PullRequestSidebarEntry.svelte';
 	import { type SidebarEntrySubject } from '$lib/navigation/types';
 	import ScrollableContainer from '$lib/scroll/ScrollableContainer.svelte';
-	import { getContext } from '$lib/utils/context';
+	import { getContext } from '@gitbutler/shared/context';
 	import Badge from '@gitbutler/ui/Badge.svelte';
+	import EmptyStatePlaceholder from '@gitbutler/ui/EmptyStatePlaceholder.svelte';
 	import Icon from '@gitbutler/ui/Icon.svelte';
 	import Segment from '@gitbutler/ui/segmentControl/Segment.svelte';
 	import SegmentControl from '@gitbutler/ui/segmentControl/SegmentControl.svelte';
@@ -35,9 +35,9 @@
 	function openSearch() {
 		searching = true;
 
-		if (searchEl) {
+		setTimeout(() => {
 			searchEl.focus();
-		}
+		}, 0);
 	}
 
 	function toggleSearch() {
@@ -110,7 +110,12 @@
 			</div>
 
 			<div class="search-container" class:show-search={searching}>
-				<button tabindex={searching ? -1 : 0} class="search-button" onclick={toggleSearch}>
+				<button
+					type="button"
+					tabindex={searching ? -1 : 0}
+					class="search-button"
+					onclick={toggleSearch}
+				>
 					<Icon name={searching ? 'cross' : 'search'} />
 				</button>
 
@@ -154,8 +159,10 @@
 				{/if}
 			</ScrollableContainer>
 		{:else}
-			<EmptyStatePlaceholder image={noBranchesSvg} width="11rem">
-				<svelte:fragment slot="caption">No branches<br />match your filter</svelte:fragment>
+			<EmptyStatePlaceholder image={noBranchesSvg} width={180} bottomMargin={48}>
+				{#snippet caption()}
+					No branches<br />match your filter
+				{/snippet}
 			</EmptyStatePlaceholder>
 		{/if}
 	{:else}
@@ -260,7 +267,7 @@
 	.search-input {
 		width: 100%;
 		height: 100%;
-		visibility: hidden;
+		display: none;
 		padding-left: 8px;
 		border-radius: var(--radius-s);
 		border: 1px solid var(--clr-border-2);
@@ -289,7 +296,7 @@
 		}
 
 		& .search-input {
-			visibility: visible;
+			display: block;
 		}
 	}
 

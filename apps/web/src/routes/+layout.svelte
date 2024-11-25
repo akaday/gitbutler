@@ -3,9 +3,16 @@
 	import { AuthService } from '$lib/auth/authService';
 	import Navigation from '$lib/components/Navigation.svelte';
 	import { UserService } from '$lib/user/userService';
+	import {
+		CloudRepositoriesService,
+		RepositoriesApiService
+	} from '@gitbutler/shared/cloud/repositories/service';
+	import { HttpClient } from '@gitbutler/shared/httpClient';
+	import { WebRoutesService, setRoutesService } from '@gitbutler/shared/sharedRoutes';
 	import { setContext, type Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { env } from '$env/dynamic/public';
 
 	interface Props {
 		children: Snippet;
@@ -13,14 +20,27 @@
 
 	const { children }: Props = $props();
 
-	setContext(AuthService, $page.data.authService);
-	setContext(UserService, $page.data.userService);
+	const webRoutesService = new WebRoutesService();
+	setRoutesService(webRoutesService);
+
+	const authService = new AuthService();
+	setContext(AuthService, authService);
+
+	const httpClient = new HttpClient(window.fetch, env.PUBLIC_APP_HOST, authService.token);
+	setContext(HttpClient, httpClient);
+
+	const userService = new UserService(httpClient);
+	setContext(UserService, userService);
+
+	const repositoriesApiService = new RepositoriesApiService(httpClient);
+	const cloudRepositoriesService = new CloudRepositoriesService(repositoriesApiService);
+	setContext(CloudRepositoriesService, cloudRepositoriesService);
 
 	$effect(() => {
 		if ($page.url.searchParams.get('gb_access_token')) {
 			const token = $page.url.searchParams.get('gb_access_token');
 			if (token && token.length > 0) {
-				$page.data.authService.setToken(token);
+				authService.setToken(token);
 
 				$page.url.searchParams.delete('gb_access_token');
 				goto(`?${$page.url.searchParams.toString()}`);

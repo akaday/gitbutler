@@ -6,7 +6,7 @@
 	import type { ComponentColor, ComponentStyleKind } from '@gitbutler/ui/utils/colorTypes';
 	import type { Snippet } from 'svelte';
 
-	interface DropDownButtonProps {
+	interface Props {
 		icon?: keyof typeof iconsJson;
 		style?: ComponentColor;
 		kind?: ComponentStyleKind;
@@ -15,6 +15,7 @@
 		loading?: boolean;
 		wide?: boolean;
 		tooltip?: string;
+		type?: 'button' | 'submit' | 'reset';
 		menuPosition?: 'top' | 'bottom';
 		children: Snippet;
 		contextMenuSlot: Snippet;
@@ -29,16 +30,22 @@
 		disabled = false,
 		loading = false,
 		wide = false,
+		type,
 		tooltip,
 		menuPosition = 'bottom',
 		children,
 		contextMenuSlot,
 		onclick
-	}: DropDownButtonProps = $props();
+	}: Props = $props();
 
 	let contextMenu = $state<ReturnType<typeof ContextMenu>>();
 	let iconEl = $state<HTMLElement>();
 	let visible = $state(false);
+
+	function preventContextMenu(e: MouseEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+	}
 
 	export function show() {
 		visible = true;
@@ -58,11 +65,13 @@
 				{style}
 				{icon}
 				{kind}
+				{type}
 				{outline}
 				reversedDirection
 				disabled={disabled || loading}
 				dropdownChild
 				{onclick}
+				oncontextmenu={preventContextMenu}
 			>
 				{@render children()}
 			</Button>
@@ -79,11 +88,12 @@
 					visible = !visible;
 					contextMenu?.toggle();
 				}}
+				oncontextmenu={preventContextMenu}
 			/>
 		</div>
 		<ContextMenu
 			bind:this={contextMenu}
-			target={iconEl}
+			leftClickTrigger={iconEl}
 			verticalAlign={menuPosition}
 			onclose={() => {
 				visible = false;

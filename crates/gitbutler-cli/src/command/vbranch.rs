@@ -1,25 +1,25 @@
-use anyhow::{bail, Result};
-use gitbutler_branch::{
-    Branch, BranchCreateRequest, BranchIdentity, BranchUpdateRequest, VirtualBranchesHandle,
-};
-use gitbutler_branch_actions::{get_branch_listing_details, list_branches};
+use anyhow::{bail, Context, Result};
+use gitbutler_branch::{BranchCreateRequest, BranchIdentity, BranchUpdateRequest};
+use gitbutler_branch_actions::{get_branch_listing_details, list_branches, BranchManagerExt};
 use gitbutler_command_context::CommandContext;
 use gitbutler_project::Project;
+use gitbutler_stack::{Stack, VirtualBranchesHandle};
 
 use crate::command::debug_print;
 
-pub fn update_target(project: Project) -> Result<()> {
-    let unapplied = gitbutler_branch_actions::update_base_branch(&project)?;
-    debug_print(unapplied)
+pub fn set_base(project: Project, short_tracking_branch_name: String) -> Result<()> {
+    let branch_name = format!("refs/remotes/{}", short_tracking_branch_name)
+        .parse()
+        .context("Invalid branch name")?;
+    debug_print(gitbutler_branch_actions::set_base_branch(
+        &project,
+        &branch_name,
+    )?)
 }
 
 pub fn list_all(project: Project) -> Result<()> {
     let ctx = CommandContext::open(&project)?;
     debug_print(list_branches(&ctx, None, None)?)
-}
-
-pub fn list_local(project: Project) -> Result<()> {
-    debug_print(gitbutler_branch_actions::list_local_branches(project)?)
 }
 
 pub fn details(project: Project, branch_names: Vec<BranchIdentity>) -> Result<()> {
@@ -28,21 +28,17 @@ pub fn details(project: Project, branch_names: Vec<BranchIdentity>) -> Result<()
 }
 
 pub fn list(project: Project) -> Result<()> {
-    let branches = VirtualBranchesHandle::new(project.gb_dir()).list_all_branches()?;
-    for vbranch in branches {
+    let stacks = VirtualBranchesHandle::new(project.gb_dir()).list_all_stacks()?;
+    for stack in stacks {
         println!(
             "{active} {id} {name} {upstream} {default}",
-            active = if vbranch.in_workspace {
-                "✔️"
-            } else {
-                "⛌"
-            },
-            id = vbranch.id,
-            name = vbranch.name,
-            upstream = vbranch
+            active = if stack.in_workspace { "✔️" } else { "⛌" },
+            id = stack.id,
+            name = stack.name,
+            upstream = stack
                 .upstream
                 .map_or_else(Default::default, |b| b.to_string()),
-            default = if vbranch.in_workspace { "🌟" } else { "" }
+            default = if stack.in_workspace { "🌟" } else { "" }
         );
     }
     Ok(())
@@ -53,10 +49,27 @@ pub fn status(project: Project) -> Result<()> {
 }
 
 pub fn unapply(project: Project, branch_name: String) -> Result<()> {
-    let branch = branch_by_name(&project, &branch_name)?;
+    let stack = branch_by_name(&project, &branch_name)?;
     debug_print(gitbutler_branch_actions::save_and_unapply_virutal_branch(
-        &project, branch.id,
+        &project, stack.id,
     )?)
+}
+
+pub fn apply(project: Project, branch_name: String) -> Result<()> {
+    let stack = branch_by_name(&project, &branch_name)?;
+    let ctx = CommandContext::open(&project)?;
+    let mut guard = project.exclusive_worktree_access();
+    debug_print(
+        ctx.branch_manager().create_virtual_branch_from_branch(
+            stack
+                .source_refname
+                .as_ref()
+                .context("local reference name was missing")?,
+            None,
+            None,
+            guard.write_permission(),
+        )?,
+    )
 }
 
 pub fn create(project: Project, branch_name: String, set_default: bool) -> Result<()> {
@@ -68,22 +81,22 @@ pub fn create(project: Project, branch_name: String, set_default: bool) -> Resul
         },
     )?;
     if set_default {
-        let new = VirtualBranchesHandle::new(project.gb_dir()).get_branch(new)?;
+        let new = VirtualBranchesHandle::new(project.gb_dir()).get_stack(new)?;
         set_default_branch(&project, &new)?;
     }
     debug_print(new)
 }
 
 pub fn set_default(project: Project, branch_name: String) -> Result<()> {
-    let branch = branch_by_name(&project, &branch_name)?;
-    set_default_branch(&project, &branch)
+    let stack = branch_by_name(&project, &branch_name)?;
+    set_default_branch(&project, &stack)
 }
 
-fn set_default_branch(project: &Project, branch: &Branch) -> Result<()> {
+fn set_default_branch(project: &Project, stack: &Stack) -> Result<()> {
     gitbutler_branch_actions::update_virtual_branch(
         project,
         BranchUpdateRequest {
-            id: branch.id,
+            id: stack.id,
             name: None,
             notes: None,
             ownership: None,
@@ -95,8 +108,15 @@ fn set_default_branch(project: &Project, branch: &Branch) -> Result<()> {
     )
 }
 
+pub fn series(project: Project, stack_name: String, new_series_name: String) -> Result<()> {
+    let mut stack = branch_by_name(&project, &stack_name)?;
+    let ctx = CommandContext::open(&project)?;
+    stack.add_series_top_of_stack(&ctx, new_series_name, None)?;
+    Ok(())
+}
+
 pub fn commit(project: Project, branch_name: String, message: String) -> Result<()> {
-    let branch = branch_by_name(&project, &branch_name)?;
+    let stack = branch_by_name(&project, &branch_name)?;
     let (info, skipped) = gitbutler_branch_actions::list_virtual_branches(&project)?;
 
     if !skipped.is_empty() {
@@ -108,7 +128,7 @@ pub fn commit(project: Project, branch_name: String, message: String) -> Result<
 
     let populated_branch = info
         .iter()
-        .find(|b| b.id == branch.id)
+        .find(|b| b.id == stack.id)
         .expect("A populated branch exists for a branch we can list");
     if populated_branch.ownership.claims.is_empty() {
         bail!(
@@ -137,16 +157,16 @@ pub fn commit(project: Project, branch_name: String, message: String) -> Result<
     let run_hooks = false;
     debug_print(gitbutler_branch_actions::create_commit(
         &project,
-        branch.id,
+        stack.id,
         &message,
         Some(&populated_branch.ownership),
         run_hooks,
     )?)
 }
 
-pub fn branch_by_name(project: &Project, name: &str) -> Result<Branch> {
+pub fn branch_by_name(project: &Project, name: &str) -> Result<Stack> {
     let mut found: Vec<_> = VirtualBranchesHandle::new(project.gb_dir())
-        .list_all_branches()?
+        .list_all_stacks()?
         .into_iter()
         .filter(|b| b.name == name)
         .collect();

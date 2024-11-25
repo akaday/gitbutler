@@ -1,15 +1,15 @@
 <script lang="ts">
-	import TextArea from '../shared/TextArea.svelte';
-	import TextBox from '../shared/TextBox.svelte';
-	import { HttpClient } from '$lib/backend/httpClient';
 	import { invoke, listen } from '$lib/backend/ipc';
 	import * as zip from '$lib/backend/zip';
 	import { User } from '$lib/stores/user';
-	import { getContext, getContextStore } from '$lib/utils/context';
 	import * as toasts from '$lib/utils/toasts';
+	import { getContext, getContextStore } from '@gitbutler/shared/context';
+	import { HttpClient } from '@gitbutler/shared/httpClient';
 	import Button from '@gitbutler/ui/Button.svelte';
 	import Checkbox from '@gitbutler/ui/Checkbox.svelte';
 	import Modal from '@gitbutler/ui/Modal.svelte';
+	import Textarea from '@gitbutler/ui/Textarea.svelte';
+	import Textbox from '@gitbutler/ui/Textbox.svelte';
 	import { getVersion } from '@tauri-apps/api/app';
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
@@ -27,7 +27,7 @@
 	const user = getContextStore(User);
 
 	export function show() {
-		modal.show();
+		modal?.show();
 	}
 
 	async function gitIndexLength() {
@@ -36,12 +36,11 @@
 		});
 	}
 
-	let modal: Modal;
+	let modal: ReturnType<typeof Modal> | undefined;
 
 	let messageInputValue = '';
 	let emailInputValue = '';
 	let sendLogs = false;
-	let sendProjectData = false;
 	let sendProjectRepository = false;
 
 	$: projectId = $page.params.projectId!;
@@ -49,13 +48,12 @@
 	function reset() {
 		messageInputValue = '';
 		sendLogs = false;
-		sendProjectData = false;
 		sendProjectRepository = false;
 	}
 
 	async function readZipFile(path: string, filename?: string): Promise<File | Blob> {
-		const { readBinaryFile } = await import('@tauri-apps/api/fs');
-		const file = await readBinaryFile(path);
+		const { readFile } = await import('@tauri-apps/plugin-fs');
+		const file = await readFile(path);
 		const fileName = filename ?? path.split('/').pop();
 		return fileName
 			? new File([file], fileName, { type: 'application/zip' })
@@ -78,33 +76,23 @@
 		toasts.promise(
 			Promise.all([
 				sendLogs ? zip.logs().then(async (path) => await readZipFile(path, 'logs.zip')) : undefined,
-				sendProjectData
-					? zip
-							.gitbutlerData({ projectId })
-							.then(async (path) => await readZipFile(path, 'data.zip'))
-							.catch(() => undefined)
-					: undefined,
 				sendProjectRepository
 					? zip
 							.projectData({ projectId })
 							.then(async (path) => await readZipFile(path, 'project.zip'))
 					: undefined
 			]).then(
-				async ([logs, data, repo]) =>
+				async ([logs, repo]) =>
 					await createFeedback($user?.access_token, {
 						email,
 						message,
 						context,
 						logs,
-						data,
 						repo
 					})
 			),
 			{
-				loading:
-					!sendLogs && !sendProjectData && !sendProjectRepository
-						? 'Sending feedback...'
-						: 'Uploading data...',
+				loading: !sendLogs && !sendProjectRepository ? 'Sending feedback...' : 'Uploading data...',
 				success: 'Feedback sent successfully',
 				error: 'Failed to send feedback'
 			}
@@ -119,7 +107,6 @@
 			message: string;
 			context?: string;
 			logs?: Blob | File;
-			data?: Blob | File;
 			repo?: Blob | File;
 		}
 	): Promise<Feedback> {
@@ -129,19 +116,17 @@
 		if (params.context) formData.append('context', params.context);
 		if (params.logs) formData.append('logs', params.logs);
 		if (params.repo) formData.append('repo', params.repo);
-		if (params.data) formData.append('data', params.data);
 
 		// Content Type must be unset for the right form-data border to be set automatically
 		return await httpClient.put('feedback', {
 			body: formData,
-			headers: { 'Content-Type': undefined },
-			token
+			headers: { 'Content-Type': undefined }
 		});
 	}
 
 	function close() {
 		reset();
-		modal.close();
+		modal?.close();
 	}
 
 	onMount(() => {
@@ -167,7 +152,7 @@
 		</p>
 
 		{#if !$user}
-			<TextBox
+			<Textbox
 				label="Email"
 				placeholder="Provide an email so that we can get back to you"
 				type="email"
@@ -176,19 +161,19 @@
 				autocomplete={false}
 				autocorrect={false}
 				spellcheck
-				focus
+				autofocus
 			/>
 		{/if}
 
-		<TextArea
+		<Textarea
 			label="Comments"
 			placeholder="Provide any steps necessary to reproduce the problem."
 			autocomplete="off"
 			autocorrect="off"
 			spellcheck
 			id="comments"
-			rows={6}
-			maxHeight={400}
+			minRows={6}
+			maxRows={10}
 			bind:value={messageInputValue}
 		/>
 
@@ -207,11 +192,6 @@
 			</div>
 
 			{#if projectId}
-				<div class="content-wrapper__checkbox">
-					<Checkbox name="project-data" bind:checked={sendProjectData} />
-					<label class="text-13" for="project-data">Share project data</label>
-				</div>
-
 				<div class="content-wrapper__checkbox">
 					<Checkbox name="project-repository" bind:checked={sendProjectRepository} />
 					<label class="text-13" for="project-repository">Share project repository</label>

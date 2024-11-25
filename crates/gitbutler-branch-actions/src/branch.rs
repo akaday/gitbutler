@@ -1,20 +1,23 @@
+use crate::gravatar::gravatar_url_from_email;
 use crate::{RemoteBranchFile, VirtualBranchesExt};
 use anyhow::{bail, Context, Result};
-use bstr::{BStr, ByteSlice};
+use bstr::{BStr, BString, ByteSlice};
 use core::fmt;
-use gitbutler_branch::{
-    Branch as GitButlerBranch, BranchId, BranchIdentity, ReferenceExtGix, Target,
-};
+use gitbutler_branch::BranchIdentity;
+use gitbutler_branch::ReferenceExtGix;
 use gitbutler_command_context::CommandContext;
 use gitbutler_diff::DiffByPathMap;
 use gitbutler_oxidize::{git2_to_gix_object_id, gix_to_git2_oid};
 use gitbutler_project::access::WorktreeReadPermission;
 use gitbutler_reference::normalize_branch_name;
+use gitbutler_reference::RemoteRefname;
 use gitbutler_repo::{GixRepositoryExt, RepositoryExt as _};
 use gitbutler_serde::BStringForFrontend;
+use gitbutler_stack::{Stack as GitButlerBranch, StackId, Target};
 use gix::object::tree::diff::Action;
-use gix::prelude::ObjectIdExt;
+use gix::prelude::{ObjectIdExt, TreeDiffChangeExt};
 use gix::reference::Category;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -40,15 +43,8 @@ pub(crate) fn get_uncommited_files(
     _permission: &WorktreeReadPermission,
 ) -> Result<Vec<RemoteBranchFile>> {
     let files = get_uncommited_files_raw(context, _permission)?
-        .into_iter()
-        .map(|(path, file)| {
-            let binary = file.hunks.iter().any(|h| h.binary);
-            RemoteBranchFile {
-                path,
-                hunks: file.hunks,
-                binary,
-            }
-        })
+        .into_values()
+        .map(|file| file.into())
         .collect();
 
     Ok(files)
@@ -94,12 +90,8 @@ pub fn list_branches(
         });
     }
 
-    branches.extend(
-        vb_handle
-            .list_all_branches()?
-            .into_iter()
-            .map(GroupBranch::Virtual),
-    );
+    let stacks = vb_handle.list_all_stacks()?;
+    branches.extend(stacks.iter().map(|s| GroupBranch::Virtual(s.clone())));
     let mut branches = combine_branches(branches, &repo, vb_handle.get_default_target()?)?;
 
     // Apply the filter
@@ -135,6 +127,31 @@ pub fn list_branches(
         branches.retain(|branch_listing| branch_names.contains(&branch_listing.name))
     }
 
+    // Get a list of all stack branches that do not have the same name as the
+    // stack itself.
+    let branch_identities_to_exclude = stacks
+        .iter()
+        .filter(|stack| {
+            let Ok(normalized_name) = normalize_branch_name(&stack.name) else {
+                return false;
+            };
+            let head_matches_stack_name = stack
+                .branches()
+                .iter()
+                .any(|branch| branch.name == normalized_name);
+
+            !head_matches_stack_name
+        })
+        .flat_map(|s| {
+            s.branches()
+                .into_iter()
+                .map(|b| BString::from(b.name))
+                .collect_vec()
+        })
+        .collect_vec();
+
+    branches.retain(|branch| !branch_identities_to_exclude.contains(&(*branch.name).to_owned()));
+
     Ok(branches)
 }
 
@@ -150,7 +167,7 @@ fn matches_all(branch: &BranchListing, filter: BranchListingFilter) -> bool {
     if let Some(local) = filter.local {
         conditions.push((branch.has_local || branch.virtual_branch.is_some()) && local);
     }
-    return conditions.iter().all(|&x| x);
+    conditions.iter().all(|&x| x)
 }
 
 fn combine_branches(
@@ -164,10 +181,15 @@ fn combine_branches(
     // Group branches by identity
     let mut groups: HashMap<BranchIdentity, Vec<GroupBranch>> = HashMap::new();
     for branch in group_branches {
+        // Skip the target branch, like 'main' or 'master'
+        if branch.is_remote_branch(&target_branch.branch) {
+            continue;
+        }
+
         let Some(identity) = branch.identity(&remotes) else {
             continue;
         };
-        // Skip branches that should not be listed, e.g. the target 'main' or the gitbutler technical branches like 'gitbutler/workspace'
+        // Skip branches that should not be listed, e.g. the gitbutler technical branches like 'gitbutler/workspace'
         if !should_list_git_branch(&identity) {
             continue;
         }
@@ -242,10 +264,21 @@ fn branch_group_to_branch(
     }
 
     // Virtual branch associated with this branch
-    let virtual_branch_reference = virtual_branch.map(|branch| VirtualBranchReference {
-        given_name: branch.name.clone(),
-        id: branch.id,
-        in_workspace: branch.in_workspace,
+    let virtual_branch_reference = virtual_branch.map(|stack| VirtualBranchReference {
+        given_name: stack.name.clone(),
+        id: stack.id,
+        in_workspace: stack.in_workspace,
+        stack_branches: stack
+            .branches()
+            .iter()
+            .rev()
+            .map(|b| b.name.clone())
+            .collect_vec(),
+        pull_requests: stack
+            .branches()
+            .iter()
+            .filter_map(|b| b.pr_number.map(|pr| (b.name.clone(), pr)))
+            .collect(),
     });
 
     let mut remotes: Vec<gix::remote::Name<'static>> = Vec::new();
@@ -261,7 +294,7 @@ fn branch_group_to_branch(
     // If there is a virtual branch let's get it's head. Alternatively, pick the first local branch and use it's head.
     // If there are no local branches, pick the first remote branch.
     let head_commit = if let Some(vbranch) = virtual_branch {
-        Some(git2_to_gix_object_id(vbranch.head).attach(repo))
+        Some(git2_to_gix_object_id(vbranch.head()).attach(repo))
     } else if let Some(mut branch) = local_branches.into_iter().next() {
         branch.peel_to_id_in_place_packed(packed).ok()
     } else if let Some(mut branch) = remote_branches.into_iter().next() {
@@ -343,6 +376,15 @@ impl GroupBranch<'_> {
         }
         .map(BranchIdentity::from)
     }
+
+    /// Determines if the branch is a remote branch by ref name
+    fn is_remote_branch(&self, ref_name: &RemoteRefname) -> bool {
+        if let GroupBranch::Remote(branch) = self {
+            ref_name == branch.name()
+        } else {
+            false
+        }
+    }
 }
 
 /// Determines if a branch should be listed in the UI.
@@ -406,26 +448,48 @@ pub struct BranchListing {
 
 /// Represents a "commit author" or "signature", based on the data from the git history
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
 pub struct Author {
     /// The name of the author as configured in the git config
     pub name: Option<BStringForFrontend>,
     /// The email of the author as configured in the git config
     pub email: Option<BStringForFrontend>,
+
+    pub gravatar_url: Option<BStringForFrontend>,
 }
 
 impl From<git2::Signature<'_>> for Author {
     fn from(value: git2::Signature) -> Self {
         let name = value.name().map(str::to_string).map(Into::into);
         let email = value.email().map(str::to_string).map(Into::into);
-        Author { name, email }
+
+        let gravatar_url = match value.email() {
+            Some(email) => gravatar_url_from_email(email)
+                .map(|url| url.as_ref().into())
+                .ok(),
+            None => None,
+        };
+
+        Author {
+            name,
+            email,
+            gravatar_url,
+        }
     }
 }
 
 impl From<gix::actor::SignatureRef<'_>> for Author {
     fn from(value: gix::actor::SignatureRef<'_>) -> Self {
+        let gravatar_url = {
+            gravatar_url_from_email(&value.email.to_str_lossy())
+                .map(|url| url.as_ref().into())
+                .ok()
+        };
+
         Author {
             name: Some(value.name.to_owned().into()),
             email: Some(value.email.to_owned().into()),
+            gravatar_url,
         }
     }
 }
@@ -437,9 +501,14 @@ pub struct VirtualBranchReference {
     /// A non-normalized name of the branch, set by the user
     pub given_name: String,
     /// Virtual Branch UUID identifier
-    pub id: BranchId,
+    pub id: StackId,
     /// Determines if the virtual branch is applied in the workspace
     pub in_workspace: bool,
+    /// List of branches that are part of the stack
+    /// Ordered from newest to oldest (the most recent branch is first in the list)
+    pub stack_branches: Vec<String>,
+    /// Pull Request numbes by branch name associated with the stack
+    pub pull_requests: HashMap<String, usize>,
 }
 
 /// Takes a list of `branch_names` (the given name, as returned by `BranchListing`) and returns
@@ -462,18 +531,12 @@ pub fn get_branch_listing_details(
             .virtual_branches()
             .get_default_target()
             .context("failed to get default target")?;
-        let local_branch = repo.find_reference(target.branch.branch())?;
-        let local_tracking_ref_name = local_branch
-            .remote_tracking_ref_name(gix::remote::Direction::Fetch)
-            .with_context(|| {
-                format!(
-                    "Branch {} did not have a remote tracking branch",
-                    local_branch.name().as_bstr()
-                )
-            })??;
-        let mut local_tracking_ref = repo.find_reference(local_tracking_ref_name.as_ref())?;
+        let target_branch_name = format!("{}/{}", &target.branch.remote(), &target.branch.branch());
+        let target_branch_name = target_branch_name.as_str();
+        let mut target_branch = repo.find_reference(target_branch_name)?;
+
         (
-            gix_to_git2_oid(local_tracking_ref.peel_to_commit()?.id),
+            gix_to_git2_oid(target_branch.peel_to_commit()?.id),
             target.sha,
         )
     };
@@ -559,15 +622,23 @@ pub fn get_branch_listing_details(
                             Some(base) => {
                                 let mut num_commits = 0;
                                 let mut authors = HashSet::new();
-                                let revwalk = repo
-                                    .rev_walk(Some(branch_head))
-                                    .with_pruned(Some(base))
-                                    .all()?;
-                                for commit_info in revwalk {
-                                    let commit_info = commit_info?;
-                                    let commit = repo.find_commit(commit_info.id)?;
-                                    authors.insert(commit.author()?.into());
-                                    num_commits += 1;
+                                for attempt in 1..=2 {
+                                    let mut revwalk =
+                                        repo.rev_walk(Some(branch_head)).with_pruned(Some(base));
+                                    if attempt == 2 {
+                                        revwalk = revwalk
+                                            .sorting(gix::revision::walk::Sorting::BreadthFirst);
+                                    }
+                                    let revwalk = revwalk.all()?;
+                                    for commit_info in revwalk {
+                                        let commit_info = commit_info?;
+                                        let commit = repo.find_commit(commit_info.id)?;
+                                        authors.insert(commit.author()?.into());
+                                        num_commits += 1;
+                                    }
+                                    if num_commits > 0 {
+                                        break;
+                                    }
                                 }
                                 merge_tx.send(Some((base, authors, num_commits)))
                             }
@@ -598,7 +669,9 @@ pub fn get_branch_listing_details(
             };
             base_tree
                 .changes()?
-                .track_rewrites(None)
+                .options(|opts| {
+                    opts.track_rewrites(None);
+                })
                 // NOTE: `stats(head_tree)` is also possible, but we have a separate thread for that.
                 .for_each_to_obtain_tree(&head_tree, move |change| -> anyhow::Result<Action> {
                     change_tx.send(change.detach()).ok();

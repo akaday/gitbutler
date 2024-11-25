@@ -1,4 +1,12 @@
 import { DEFAULT_PR_SUMMARY_MAIN_DIRECTIVE, getPrTemplateDirective } from './prompts';
+import {
+	OpenAIModelName,
+	type AIClient,
+	AnthropicModelName,
+	ModelKind,
+	MessageRole,
+	type Prompt
+} from './types';
 import { AnthropicAIClient } from '$lib/ai/anthropicClient';
 import { ButlerAIClient } from '$lib/ai/butlerClient';
 import {
@@ -7,20 +15,13 @@ import {
 	OllamaClient
 } from '$lib/ai/ollamaClient';
 import { OpenAIClient } from '$lib/ai/openAIClient';
-import {
-	OpenAIModelName,
-	type AIClient,
-	AnthropicModelName,
-	ModelKind,
-	MessageRole,
-	type Prompt
-} from '$lib/ai/types';
 import { buildFailureFromAny, isFailure, ok, type Result } from '$lib/result';
 import { splitMessage } from '$lib/utils/commitMessage';
+import { get } from 'svelte/store';
 import type { GitConfigService } from '$lib/backend/gitConfigService';
-import type { HttpClient } from '$lib/backend/httpClient';
 import type { SecretsService } from '$lib/secrets/secretsService';
-import type { Hunk } from '$lib/vbranches/types';
+import type { TokenMemoryService } from '$lib/stores/tokenMemoryService';
+import type { HttpClient } from '@gitbutler/shared/httpClient';
 
 const maxDiffLengthLimitForAPI = 5000;
 const prDescriptionTokenLimit = 4096;
@@ -52,14 +53,15 @@ interface BaseAIServiceOpts {
 }
 
 interface SummarizeCommitOpts extends BaseAIServiceOpts {
-	hunks: Hunk[];
+	diffInput: DiffInput[];
 	useEmojiStyle?: boolean;
 	useBriefStyle?: boolean;
 	commitTemplate?: Prompt;
+	branchName?: string;
 }
 
 interface SummarizeBranchOpts extends BaseAIServiceOpts {
-	hunks: Hunk[];
+	hunks: DiffInput[];
 	branchTemplate?: Prompt;
 }
 
@@ -72,8 +74,13 @@ interface SummarizePROpts extends BaseAIServiceOpts {
 	prBodyTemplate?: string;
 }
 
+export interface DiffInput {
+	filePath: string;
+	diff: string;
+}
+
 // Exported for testing only
-export function buildDiff(hunks: Hunk[], limit: number) {
+export function buildDiff(hunks: DiffInput[], limit: number) {
 	return shuffle(hunks.map((h) => `${h.filePath} - ${h.diff}`))
 		.join('\n')
 		.slice(0, limit);
@@ -92,7 +99,8 @@ export class AIService {
 	constructor(
 		private gitConfig: GitConfigService,
 		private secretsService: SecretsService,
-		private cloud: HttpClient
+		private cloud: HttpClient,
+		private tokenMemoryService: TokenMemoryService
 	) {}
 
 	async getModelKind() {
@@ -187,14 +195,14 @@ export class AIService {
 		return openAIActiveAndUsingButlerAPI || anthropicActiveAndUsingButlerAPI;
 	}
 
-	async validateConfiguration(userToken?: string): Promise<boolean> {
+	async validateConfiguration(): Promise<boolean> {
 		const modelKind = await this.getModelKind();
 		const openAIKey = await this.getOpenAIKey();
 		const anthropicKey = await this.getAnthropicKey();
 		const ollamaEndpoint = await this.getOllamaEndpoint();
 		const ollamaModelName = await this.getOllamaModelName();
 
-		if (await this.usingGitButlerAPI()) return !!userToken;
+		if (await this.usingGitButlerAPI()) return !!get(this.tokenMemoryService.token);
 
 		const openAIActiveAndKeyProvided = modelKind === ModelKind.OpenAI && !!openAIKey;
 		const anthropicActiveAndKeyProvided = modelKind === ModelKind.Anthropic && !!anthropicKey;
@@ -209,16 +217,19 @@ export class AIService {
 	// This optionally returns a summarizer. There are a few conditions for how this may occur
 	// Firstly, if the user has opted to use the GB API and isn't logged in, it will return undefined
 	// Secondly, if the user has opted to bring their own key but hasn't provided one, it will return undefined
-	async buildClient(userToken?: string): Promise<Result<AIClient, Error>> {
+	async buildClient(): Promise<Result<AIClient, Error>> {
 		const modelKind = await this.getModelKind();
 
 		if (await this.usingGitButlerAPI()) {
-			if (!userToken) {
+			// TODO(CTO): Once @estib has landed the new auth, it would be good to
+			// about a good way of checking whether the user is authenticated.
+			if (!get(this.tokenMemoryService.token)) {
 				return buildFailureFromAny(
 					"When using GitButler's API to summarize code, you must be logged in"
 				);
 			}
-			return ok(new ButlerAIClient(this.cloud, userToken, modelKind));
+
+			return ok(new ButlerAIClient(this.cloud, modelKind));
 		}
 
 		if (modelKind === ModelKind.Ollama) {
@@ -257,14 +268,14 @@ export class AIService {
 	}
 
 	async summarizeCommit({
-		hunks,
+		diffInput,
 		useEmojiStyle = false,
 		useBriefStyle = false,
 		commitTemplate,
-		userToken,
-		onToken
+		onToken,
+		branchName
 	}: SummarizeCommitOpts): Promise<Result<string, Error>> {
-		const aiClientResult = await this.buildClient(userToken);
+		const aiClientResult = await this.buildClient();
 		if (isFailure(aiClientResult)) return aiClientResult;
 		const aiClient = aiClientResult.value;
 
@@ -276,7 +287,10 @@ export class AIService {
 				return promptMessage;
 			}
 
-			let content = promptMessage.content.replaceAll('%{diff}', buildDiff(hunks, diffLengthLimit));
+			let content = promptMessage.content.replaceAll(
+				'%{diff}',
+				buildDiff(diffInput, diffLengthLimit)
+			);
 
 			const briefPart = useBriefStyle
 				? 'The commit message must be only one sentence and as short as possible.'
@@ -287,6 +301,10 @@ export class AIService {
 				? 'Make use of GitMoji in the title prefix.'
 				: "Don't use any emoji.";
 			content = content.replaceAll('%{emoji_style}', emojiPart);
+
+			if (branchName) {
+				content = content.replaceAll('%{branch_name}', branchName);
+			}
 
 			return {
 				role: MessageRole.User,
@@ -309,10 +327,9 @@ export class AIService {
 	async summarizeBranch({
 		hunks,
 		branchTemplate,
-		userToken,
 		onToken
 	}: SummarizeBranchOpts): Promise<Result<string, Error>> {
-		const aiClientResult = await this.buildClient(userToken);
+		const aiClientResult = await this.buildClient();
 		if (isFailure(aiClientResult)) return aiClientResult;
 		const aiClient = aiClientResult.value;
 
@@ -331,9 +348,10 @@ export class AIService {
 
 		const messageResult = await aiClient.evaluate(prompt, { onToken });
 		if (isFailure(messageResult)) return messageResult;
+
 		const message = messageResult.value;
 
-		return ok(message.replaceAll(' ', '-').replaceAll('\n', '-'));
+		return ok(message?.replaceAll(' ', '-').replaceAll('\n', '-') ?? '');
 	}
 
 	async describePR({
@@ -343,10 +361,9 @@ export class AIService {
 		directive,
 		prTemplate,
 		prBodyTemplate,
-		userToken,
 		onToken
 	}: SummarizePROpts): Promise<Result<string, Error>> {
-		const aiClientResult = await this.buildClient(userToken);
+		const aiClientResult = await this.buildClient();
 		if (isFailure(aiClientResult)) return aiClientResult;
 		const aiClient = aiClientResult.value;
 		const defaultPRTemplate = prTemplate ?? aiClient.defaultPRTemplate;

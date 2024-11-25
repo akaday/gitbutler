@@ -1,7 +1,7 @@
 <script lang="ts">
 	import GitButler from '../images/gitbutler.svg';
 	import { AuthService } from '$lib/auth/authService';
-	import { getContext } from '$lib/utils/context';
+	import { getContext } from '@gitbutler/shared/context';
 	import { env } from '$env/dynamic/public';
 
 	const authService = getContext(AuthService);
@@ -13,6 +13,7 @@
 	}
 
 	function login() {
+		console.log(env.PUBLIC_APP_HOST);
 		window.location.href = `${env.PUBLIC_APP_HOST}cloud/login`;
 	}
 </script>
@@ -28,14 +29,21 @@
 			|
 			<a href="/projects">Projects</a>
 			|
+			<a href="/repositories">Repositories</a>
+			|
 			<a href="/user">User</a>
 		{/if}
 	</div>
 	<div class="nav__right">
 		<button
+			type="button"
 			class="nav__right--button"
 			onclick={() => {
-				$token ? logout() : login();
+				if ($token) {
+					logout();
+				} else {
+					login();
+				}
 			}}
 		>
 			{$token ? 'Log Out' : 'Log In'}

@@ -1,21 +1,33 @@
 <script lang="ts">
 	import { Project } from '$lib/backend/projects';
 	import { CommitService } from '$lib/commits/service';
-	import { editor } from '$lib/editorLink/editorLink';
+	import {
+		conflictEntryHint,
+		getConflictState,
+		getInitialFileStatus,
+		type ConflictEntryPresence,
+		type ConflictState
+	} from '$lib/conflictEntryPresence';
 	import FileContextMenu from '$lib/file/FileContextMenu.svelte';
 	import { ModeService, type EditModeMetadata } from '$lib/modes/service';
 	import ScrollableContainer from '$lib/scroll/ScrollableContainer.svelte';
+	import { SETTINGS, type Settings } from '$lib/settings/userSettings';
+	import { UserService } from '$lib/stores/user';
 	import { UncommitedFilesWatcher } from '$lib/uncommitedFiles/watcher';
-	import { getContext } from '$lib/utils/context';
-	import { openExternalUrl } from '$lib/utils/url';
+	import { computeFileStatus } from '$lib/utils/fileStatus';
+	import { getEditorUri, openExternalUrl } from '$lib/utils/url';
 	import { Commit, type RemoteFile } from '$lib/vbranches/types';
+	import { getContextStoreBySymbol } from '@gitbutler/shared/context';
+	import { getContext } from '@gitbutler/shared/context';
 	import Badge from '@gitbutler/ui/Badge.svelte';
 	import Button from '@gitbutler/ui/Button.svelte';
 	import InfoButton from '@gitbutler/ui/InfoButton.svelte';
+	import Modal from '@gitbutler/ui/Modal.svelte';
 	import Avatar from '@gitbutler/ui/avatar/Avatar.svelte';
 	import FileListItem from '@gitbutler/ui/file/FileListItem.svelte';
-	import { join } from '@tauri-apps/api/path';
+	import { SvelteSet } from 'svelte/reactivity';
 	import type { FileStatus } from '@gitbutler/ui/file/types';
+	import type { Writable } from 'svelte/store';
 
 	interface Props {
 		editModeMetadata: EditModeMetadata;
@@ -27,17 +39,30 @@
 	const remoteCommitService = getContext(CommitService);
 	const uncommitedFileWatcher = getContext(UncommitedFilesWatcher);
 	const modeService = getContext(ModeService);
+	const userSettings = getContextStoreBySymbol<Settings, Writable<Settings>>(SETTINGS);
 
 	const uncommitedFiles = uncommitedFileWatcher.uncommitedFiles;
+
+	const userService = getContext(UserService);
+	const user = userService.user;
 
 	let modeServiceAborting = $state<'inert' | 'loading' | 'completed'>('inert');
 	let modeServiceSaving = $state<'inert' | 'loading' | 'completed'>('inert');
 
-	let initialFiles = $state<RemoteFile[]>([]);
+	let initialFiles = $state<[RemoteFile, ConflictEntryPresence | undefined][]>([]);
 	let commit = $state<Commit | undefined>(undefined);
+	const authorImgUrl = $derived.by(() => {
+		if (commit) {
+			return commit.author.email?.toLowerCase() === $user?.email?.toLowerCase()
+				? $user?.picture
+				: commit.author.gravatarUrl;
+		}
+		return undefined;
+	});
 
 	let filesList = $state<HTMLDivElement | undefined>(undefined);
-	let contextMenu = $state<FileContextMenu | undefined>(undefined);
+	let contextMenu = $state<ReturnType<typeof FileContextMenu> | undefined>(undefined);
+	let confirmSaveModal = $state<ReturnType<typeof Modal> | undefined>(undefined);
 
 	$effect(() => {
 		modeService.getInitialIndexState().then((files) => {
@@ -52,83 +77,111 @@
 	});
 
 	interface FileEntry {
+		conflicted: boolean;
 		name: string;
 		path: string;
-		conflicted: boolean;
 		status?: FileStatus;
+		conflictHint?: string;
+		conflictState?: ConflictState;
+		conflictEntryPresence?: ConflictEntryPresence;
 	}
 
+	const initialFileMap = $derived(
+		new Map<string, RemoteFile>(initialFiles.map(([file]) => [file.path, file]))
+	);
+
+	const uncommitedFileMap = $derived(
+		new Map<string, RemoteFile>($uncommitedFiles.map(([file]) => [file.path, file]))
+	);
+
 	const files = $derived.by(() => {
-		const initialFileMap = new Map<string, RemoteFile>();
-		const uncommitedFileMap = new Map<string, RemoteFile>();
 		const outputMap = new Map<string, FileEntry>();
-
-		// Build maps of files
-		{
-			initialFiles.forEach((initialFile) => {
-				initialFileMap.set(initialFile.path, initialFile);
-			});
-
-			$uncommitedFiles.forEach(([uncommitedFile]) => {
-				uncommitedFileMap.set(uncommitedFile.path, uncommitedFile);
-			});
-		}
 
 		// Create output
 		{
-			initialFiles.forEach((initialFile) => {
-				const isDeleted = uncommitedFileMap.has(initialFile.path);
+			initialFiles.forEach(([initialFile, conflictEntryPresence]) => {
+				const conflictState =
+					conflictEntryPresence && getConflictState(initialFile, conflictEntryPresence);
+
+				const uncommitedFileChange = uncommitedFileMap.get(initialFile.path);
 
 				outputMap.set(initialFile.path, {
 					name: initialFile.filename,
 					path: initialFile.path,
-					conflicted: initialFile.looksConflicted,
-					status: isDeleted ? undefined : 'D'
+					conflicted: !!conflictEntryPresence,
+					conflictHint: conflictEntryPresence
+						? conflictEntryHint(conflictEntryPresence)
+						: undefined,
+					status: getInitialFileStatus(uncommitedFileChange, conflictEntryPresence),
+					conflictState,
+					conflictEntryPresence
 				});
 			});
 
 			$uncommitedFiles.forEach(([uncommitedFile]) => {
 				const existingFile = initialFileMap.get(uncommitedFile.path);
+				determineOutput: {
+					if (existingFile) {
+						const fileChanged = existingFile.hunks.some(
+							(hunk) => !uncommitedFile.hunks.map((hunk) => hunk.diff).includes(hunk.diff)
+						);
 
-				if (existingFile) {
-					const fileChanged = existingFile.hunks.some(
-						(hunk) => !uncommitedFile.hunks.map((hunk) => hunk.diff).includes(hunk.diff)
-					);
+						if (fileChanged) {
+							// All initial entries should have been added to the map,
+							// so we can safely assert that it will be present
+							const outputFile = outputMap.get(uncommitedFile.path)!;
+							if (outputFile.conflicted && outputFile.conflictEntryPresence) {
+								outputFile.conflictState = getConflictState(
+									uncommitedFile,
+									outputFile.conflictEntryPresence
+								);
+							}
 
-					if (fileChanged && !uncommitedFile.looksConflicted) {
-						// All initial entries should have been added to the map,
-						// so we can safely assert that it will be present
-						const outputFile = outputMap.get(uncommitedFile.path)!;
-						outputFile.status = 'M';
-						outputFile.conflicted = false;
-						return;
+							if (!outputFile.conflicted) {
+								outputFile.status = 'M';
+							}
+						}
+						break determineOutput;
 					}
 
-					if (uncommitedFile.looksConflicted) {
-						const outputFile = outputMap.get(uncommitedFile.path)!;
-						outputFile.conflicted = true;
-						return;
-					}
-
-					return;
+					outputMap.set(uncommitedFile.path, {
+						name: uncommitedFile.filename,
+						path: uncommitedFile.path,
+						conflicted: false,
+						status: computeFileStatus(uncommitedFile)
+					});
 				}
-
-				outputMap.set(uncommitedFile.path, {
-					name: uncommitedFile.filename,
-					path: uncommitedFile.path,
-					conflicted: false,
-					status: 'A'
-				});
 			});
 		}
 
-		const files = Array.from(outputMap.values());
-		files.sort((a, b) => a.path.localeCompare(b.path));
+		const orderedOutput = Array.from(outputMap.values());
+		orderedOutput.sort((a, b) => {
+			// Float conflicted files to the top
+			if (a.conflicted && !b.conflicted) {
+				return -1;
+			} else if (!a.conflicted && b.conflicted) {
+				return 1;
+			}
 
-		return files;
+			return a.path.localeCompare(b.path);
+		});
+
+		return orderedOutput;
 	});
 
 	const conflictedFiles = $derived(files.filter((file) => file.conflicted));
+	let manuallyResolvedFiles = new SvelteSet<string>();
+	const stillConflictedFiles = $derived(
+		conflictedFiles.filter(
+			(file) => !manuallyResolvedFiles.has(file.path) && file.conflictState !== 'resolved'
+		)
+	);
+
+	function isConflicted(file: FileEntry): boolean {
+		return (
+			file.conflicted && file.conflictState !== 'resolved' && !manuallyResolvedFiles.has(file.path)
+		);
+	}
 
 	async function abort() {
 		modeServiceAborting = 'loading';
@@ -146,12 +199,26 @@
 		modeServiceSaving = 'completed';
 	}
 
+	async function handleSave() {
+		if (stillConflictedFiles.length > 0) {
+			confirmSaveModal?.show();
+			return;
+		}
+
+		await save();
+	}
+
 	async function openAllConflictedFiles() {
 		for (const file of conflictedFiles) {
-			const absPath = await join(project.vscodePath, file.path);
-			openExternalUrl(`${$editor}://file${absPath}`);
+			const path = getEditorUri({
+				schemeId: $userSettings.defaultCodeEditor.schemeIdentifer,
+				path: [project.vscodePath, file.path]
+			});
+			openExternalUrl(path);
 		}
 	}
+
+	let isCommitListScrolled = $state(false);
 </script>
 
 <div class="editmode__container">
@@ -167,14 +234,14 @@
 
 	<div class="commit-group">
 		<div class="card commit-card">
-			<h3 class="text-13 text-semibold commit-card__title">
+			<h3 class="text-13 text-semibold text-body commit-card__title">
 				{commit?.descriptionTitle || 'Undefined commit'}
 			</h3>
 
 			{#if commit}
 				<div class="text-11 commit-card__details">
-					{#if commit.author.gravatarUrl && commit.author.email}
-						<Avatar srcUrl={commit.author.gravatarUrl} tooltip={commit.author.email} />
+					{#if authorImgUrl && commit.author.email}
+						<Avatar srcUrl={authorImgUrl} tooltip={commit.author.email} />
 						<span class="commit-card__divider">•</span>
 					{/if}
 					<span class="">{editModeMetadata.commitOid.slice(0, 7)}</span>
@@ -187,18 +254,27 @@
 		</div>
 
 		<div bind:this={filesList} class="card files">
-			<div class="header">
+			<div class="header" class:show-border={isCommitListScrolled}>
 				<h3 class="text-13 text-semibold">Commit files</h3>
 				<Badge label={files.length} />
 			</div>
-			<ScrollableContainer>
-				{#each files as file}
+			<ScrollableContainer
+				onscroll={(e) => {
+					if (e.target instanceof HTMLElement) {
+						isCommitListScrolled = e.target.scrollTop > 0;
+					}
+				}}
+			>
+				{#each files as file (file.path)}
 					<div class="file">
 						<FileListItem
 							filePath={file.path}
 							fileStatus={file.status}
-							conflicted={file.conflicted}
-							fileStatusStyle={file.status === 'M' ? 'full' : 'dot'}
+							conflicted={isConflicted(file)}
+							onresolveclick={file.conflicted
+								? () => manuallyResolvedFiles.add(file.path)
+								: undefined}
+							conflictHint={file.conflictHint}
 							onclick={(e) => {
 								contextMenu?.open(e, { files: [file] });
 							}}
@@ -214,7 +290,7 @@
 
 	<FileContextMenu
 		bind:this={contextMenu}
-		target={filesList}
+		trigger={filesList}
 		isUnapplied={false}
 		branchId={undefined}
 	/>
@@ -246,13 +322,35 @@
 			style="pop"
 			kind="solid"
 			icon="tick-small"
-			onclick={save}
+			onclick={handleSave}
 			disabled={modeServiceSaving === 'loading'}
 		>
 			Save and exit
 		</Button>
 	</div>
 </div>
+
+<Modal
+	bind:this={confirmSaveModal}
+	title="Save and exit"
+	type="warning"
+	width="small"
+	onSubmit={async (close) => {
+		await save();
+		close();
+	}}
+>
+	{#snippet children()}
+		<p class="text-13 text-body helper-text">
+			There are still some files that look to be conflicted. Are you sure that you want to save and
+			exit?
+		</p>
+	{/snippet}
+	{#snippet controls(close)}
+		<Button style="ghost" outline type="reset" onclick={close}>Cancel</Button>
+		<Button style="error" type="submit" kind="solid">Save and exit</Button>
+	{/snippet}
+</Modal>
 
 <style lang="postcss">
 	.editmode__container {
@@ -293,6 +391,10 @@
 			padding-left: 16px;
 			padding-top: 16px;
 			padding-bottom: 8px;
+
+			&.show-border {
+				border-bottom: 1px solid var(--clr-border-3);
+			}
 		}
 
 		& .file {

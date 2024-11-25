@@ -1,22 +1,17 @@
 <script lang="ts">
 	import IntegrateUpstreamModal from './IntegrateUpstreamModal.svelte';
-	import { Project } from '$lib/backend/projects';
 	import { BaseBranchService } from '$lib/baseBranch/baseBranchService';
 	import CommitAction from '$lib/commit/CommitAction.svelte';
 	import CommitCard from '$lib/commit/CommitCard.svelte';
 	import { transformAnyCommit } from '$lib/commitLines/transformers';
-	import { projectMergeUpstreamWarningDismissed } from '$lib/config/config';
-	import { getGitHost } from '$lib/gitHost/interface/gitHost';
+	import { getForge } from '$lib/forge/interface/forge';
 	import { ModeService } from '$lib/modes/service';
-	import { showInfo } from '$lib/notifications/toasts';
 	import InfoMessage from '$lib/shared/InfoMessage.svelte';
 	import { groupByCondition } from '$lib/utils/array';
-	import { getContext } from '$lib/utils/context';
-	import { BranchController } from '$lib/vbranches/branchController';
+	import { getContext } from '@gitbutler/shared/context';
 	import Button from '@gitbutler/ui/Button.svelte';
-	import Checkbox from '@gitbutler/ui/Checkbox.svelte';
 	import Modal from '@gitbutler/ui/Modal.svelte';
-	import LineGroup from '@gitbutler/ui/commitLines/LineGroup.svelte';
+	import Line from '@gitbutler/ui/commitLines/Line.svelte';
 	import { LineManagerFactory, LineSpacer } from '@gitbutler/ui/commitLines/lineManager';
 	import { tick } from 'svelte';
 	import type { BaseBranch } from '$lib/baseBranch/baseBranch';
@@ -47,23 +42,20 @@
 			tooltip: `Choose how to integrate the commits from ${base.branchName} into the base of all applied virtual branches`,
 			color: 'warning',
 			handler: handleMergeUpstream,
-			action: updateBaseBranch
+			action: () => {
+				integrateUpstreamModal?.show();
+			}
 		}
 	} as const;
 
 	type ResetBaseStrategy = keyof typeof resetBaseTo;
 
 	const baseBranchService = getContext(BaseBranchService);
-	const branchController = getContext(BranchController);
 	const modeService = getContext(ModeService);
-	const gitHost = getGitHost();
-	const project = getContext(Project);
+	const forge = getForge();
 	const lineManagerFactory = getContext(LineManagerFactory);
 
 	const mode = $derived(modeService.mode);
-	const mergeUpstreamWarningDismissed = $derived(
-		projectMergeUpstreamWarningDismissed(branchController.projectId)
-	);
 
 	let baseBranchIsUpdating = $state<boolean>(false);
 	const baseBranchConflicted = $derived(base.conflicted);
@@ -71,9 +63,8 @@
 	let resetBaseStrategy = $state<ResetBaseStrategy | undefined>(undefined);
 	let confirmResetModal = $state<Modal>();
 	const confirmResetModalOpen = $derived(!!confirmResetModal?.imports.open);
-	let integrateUpstreamModal = $state<IntegrateUpstreamModal>();
+	let integrateUpstreamModal = $state<ReturnType<typeof IntegrateUpstreamModal>>();
 	const integrateUpstreamModalOpen = $derived(!!integrateUpstreamModal?.imports.open);
-	let mergeUpstreamWarningDismissedCheckbox = $state<boolean>(false);
 
 	const pushButtonTooltip = $derived.by(() => {
 		if (onlyLocalAhead) return 'Push your local changes to upstream';
@@ -113,29 +104,16 @@
 	});
 
 	const lineManager = $derived(
-		lineManagerFactory.build(
-			{
-				remoteCommits: mappedRemoteCommits,
-				localCommits: mappedLocalCommits,
-				localAndRemoteCommits: mappedLocalAndRemoteCommits,
-				integratedCommits: []
-			},
-			true
-		)
+		lineManagerFactory.build({
+			remoteCommits: mappedRemoteCommits,
+			localCommits: mappedLocalCommits,
+			localAndRemoteCommits: mappedLocalAndRemoteCommits,
+			integratedCommits: []
+		})
 	);
 
-	async function updateBaseBranch() {
-		baseBranchIsUpdating = true;
-		const infoText = await branchController.updateBaseBranch();
-		if (infoText) {
-			showInfo('Stashed conflicting branches', infoText);
-		}
-		await tick();
-		baseBranchIsUpdating = false;
-	}
-
 	async function handleMergeUpstream() {
-		if (project.succeedingRebases && !onlyLocalAhead) {
+		if (!onlyLocalAhead) {
 			integrateUpstreamModal?.show();
 			return;
 		}
@@ -145,10 +123,6 @@
 			return;
 		}
 
-		if ($mergeUpstreamWarningDismissed) {
-			updateBaseBranch();
-			return;
-		}
 		updateTargetModal?.show();
 	}
 
@@ -231,28 +205,22 @@
 <div class="wrapper">
 	<!-- UPSTREAM COMMITS -->
 	{#if base.upstreamCommits?.length > 0}
-		<div>
-			{#each base.upstreamCommits as commit, index}
-				<CommitCard
-					{commit}
-					first={index === 0}
-					last={index === base.upstreamCommits.length - 1}
-					isUnapplied={true}
-					commitUrl={$gitHost?.commitUrl(commit.id)}
-					type="remote"
-				>
-					{#snippet lines(topHeightPx)}
-						<LineGroup lineGroup={lineManager.get(commit.id)} {topHeightPx} />
-					{/snippet}
-				</CommitCard>
-			{/each}
-		</div>
+		{#each base.upstreamCommits as commit}
+			<CommitCard
+				{commit}
+				isUnapplied={true}
+				commitUrl={$forge?.commitUrl(commit.id)}
+				type="remote"
+				disableCommitActions={true}
+			>
+				{#snippet lines()}
+					<Line line={lineManager.get(commit.id)} />
+				{/snippet}
+			</CommitCard>
+		{/each}
 
 		{#if base.diverged}
-			<CommitAction backgroundColor={false}>
-				{#snippet lines()}
-					<LineGroup lineGroup={lineManager.get(LineSpacer.Remote)} topHeightPx={0} />
-				{/snippet}
+			<CommitAction type={'remote'}>
 				{#snippet action()}
 					<Button
 						wide
@@ -275,27 +243,21 @@
 
 	<!-- DIVERGED (LOCAL) COMMITS -->
 	{#if commitsAhead.length > 0}
-		<div>
-			{#each commitsAhead as commit, index}
-				<CommitCard
-					{commit}
-					first={index === 0}
-					last={index === commitsAhead.length - 1}
-					isUnapplied={true}
-					commitUrl={$gitHost?.commitUrl(commit.id)}
-					type="local"
-				>
-					{#snippet lines(topHeightPx)}
-						<LineGroup lineGroup={lineManager.get(commit.id)} {topHeightPx} />
-					{/snippet}
-				</CommitCard>
-			{/each}
-		</div>
+		{#each commitsAhead as commit}
+			<CommitCard
+				{commit}
+				isUnapplied={true}
+				commitUrl={$forge?.commitUrl(commit.id)}
+				type="local"
+				disableCommitActions={true}
+			>
+				{#snippet lines()}
+					<Line line={lineManager.get(commit.id)} />
+				{/snippet}
+			</CommitCard>
+		{/each}
 
-		<CommitAction backgroundColor={false}>
-			{#snippet lines()}
-				<LineGroup lineGroup={lineManager.get(LineSpacer.Local)} topHeightPx={0} />
-			{/snippet}
+		<CommitAction type={'local'}>
 			{#snippet action()}
 				<div class="local-actions-wrapper">
 					<Button
@@ -334,64 +296,20 @@
 	{/if}
 
 	<!-- LOCAL AND REMOTE COMMITS -->
-	<div>
-		{#each localAndRemoteCommits as commit, index}
-			<CommitCard
-				{commit}
-				first={index === 0}
-				last={index === localAndRemoteCommits.length - 1}
-				isUnapplied={true}
-				commitUrl={$gitHost?.commitUrl(commit.id)}
-				type="localAndRemote"
-			>
-				{#snippet lines(topHeightPx)}
-					<LineGroup lineGroup={lineManager.get(commit.id)} {topHeightPx} />
-				{/snippet}
-			</CommitCard>
-		{/each}
-	</div>
+	{#each localAndRemoteCommits as commit}
+		<CommitCard
+			{commit}
+			isUnapplied={true}
+			commitUrl={$forge?.commitUrl(commit.id)}
+			type="localAndRemote"
+			disableCommitActions={true}
+		>
+			{#snippet lines()}
+				<Line line={lineManager.get(commit.id)} />
+			{/snippet}
+		</CommitCard>
+	{/each}
 </div>
-
-<Modal
-	width="small"
-	bind:this={updateTargetModal}
-	title="Merge Upstream Work"
-	onSubmit={(close) => {
-		updateBaseBranch();
-		if (mergeUpstreamWarningDismissedCheckbox) {
-			mergeUpstreamWarningDismissed.set(true);
-		}
-		close();
-	}}
->
-	<div class="modal-content">
-		<p class="text-14 text-body">You are about to merge upstream work from your base branch.</p>
-	</div>
-	<div class="modal-content">
-		<h4 class="text-14 text-body text-semibold">What will this do?</h4>
-		<p class="modal__small-text text-12 text-body">
-			We will try to merge the work that is upstream into each of your virtual branches, so that
-			they are all up to date.
-		</p>
-		<p class="modal__small-text text-12 text-body">
-			Any virtual branches that we can't merge cleanly, we will unapply and mark with a blue dot.
-			You can merge these manually later.
-		</p>
-		<p class="modal__small-text text-12 text-body">
-			Any virtual branches that are fully integrated upstream will be automatically removed.
-		</p>
-	</div>
-
-	<label class="modal__dont-show-again" for="dont-show-again">
-		<Checkbox name="dont-show-again" bind:checked={mergeUpstreamWarningDismissedCheckbox} />
-		<span class="text-12">Don't show this again</span>
-	</label>
-
-	{#snippet controls(close)}
-		<Button style="ghost" outline onclick={close}>Cancel</Button>
-		<Button style="pop" kind="solid" type="submit">Merge Upstream</Button>
-	{/snippet}
-</Modal>
 
 {#if resetBaseStrategy}
 	<Modal
@@ -436,16 +354,36 @@
 		display: flex;
 		flex-direction: column;
 		gap: 16px;
+		margin: 1rem;
+
+		& ~ .wrapper {
+			border-top: 1px solid var(--clr-border-2);
+
+			:global(.commit-row):first-child {
+				border-radius: 0;
+			}
+		}
 	}
+
 	.message-wrapper {
 		display: flex;
 		flex-direction: column;
 		margin-bottom: 20px;
 		gap: 16px;
 	}
+
 	.wrapper {
 		display: flex;
 		flex-direction: column;
+
+		:global(.commit-row):first-child {
+			border-radius: var(--radius-m) var(--radius-m) 0 0;
+		}
+
+		:global(.commit-row):last-child {
+			border-bottom: none;
+			border-radius: 0 0 var(--radius-m) var(--radius-m);
+		}
 	}
 
 	.info-text {
@@ -467,19 +405,5 @@
 		&:last-child {
 			margin-bottom: 0;
 		}
-	}
-
-	.modal__small-text {
-		opacity: 0.6;
-	}
-
-	.modal__dont-show-again {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 14px;
-		background-color: var(--clr-bg-2);
-		border-radius: var(--radius-m);
-		margin-bottom: 6px;
 	}
 </style>

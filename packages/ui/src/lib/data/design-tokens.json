@@ -569,7 +569,7 @@
 		"warn": {
 			"5": {
 				"$type": "color",
-				"$value": "#261c0d",
+				"$value": "#261b0b",
 				"$description": "",
 				"$extensions": {
 					"mode": {},
@@ -585,7 +585,7 @@
 			},
 			"10": {
 				"$type": "color",
-				"$value": "#432d0f",
+				"$value": "#432c0d",
 				"$description": "",
 				"$extensions": {
 					"mode": {},
@@ -601,7 +601,7 @@
 			},
 			"20": {
 				"$type": "color",
-				"$value": "#604116",
+				"$value": "#603f11",
 				"$description": "",
 				"$extensions": {
 					"mode": {},
@@ -617,7 +617,7 @@
 			},
 			"30": {
 				"$type": "color",
-				"$value": "#8a5914",
+				"$value": "#8a550b",
 				"$description": "",
 				"$extensions": {
 					"mode": {},
@@ -633,7 +633,7 @@
 			},
 			"40": {
 				"$type": "color",
-				"$value": "#c77f1a",
+				"$value": "#be7105",
 				"$description": "",
 				"$extensions": {
 					"mode": {},
@@ -649,7 +649,7 @@
 			},
 			"50": {
 				"$type": "color",
-				"$value": "#dc9914",
+				"$value": "#d99611",
 				"$description": "",
 				"$extensions": {
 					"mode": {},
@@ -3476,12 +3476,12 @@
 			},
 			"local": {
 				"$type": "color",
-				"$value": "{clr-core.pop.50}",
+				"$value": "{clr-core.ntrl.50}",
 				"$description": "",
 				"$extensions": {
 					"mode": {
-						"light": "{clr-core.pop.50}",
-						"dark": "{clr-core.pop.50}"
+						"light": "{clr-core.ntrl.50}",
+						"dark": "{clr-core.ntrl.50}"
 					},
 					"figma": {
 						"variableId": "VariableID:3171:9428",
@@ -3495,12 +3495,12 @@
 			},
 			"remote": {
 				"$type": "color",
-				"$value": "{clr-core.ntrl.50}",
+				"$value": "{clr-core.pop.50}",
 				"$description": "",
 				"$extensions": {
 					"mode": {
-						"light": "{clr-core.ntrl.50}",
-						"dark": "{clr-core.ntrl.50}"
+						"light": "{clr-core.pop.50}",
+						"dark": "{clr-core.pop.50}"
 					},
 					"figma": {
 						"variableId": "VariableID:3171:9429",
@@ -3514,12 +3514,12 @@
 			},
 			"shadow": {
 				"$type": "color",
-				"$value": "{clr-core.ntrl.60}",
+				"$value": "{clr-core.pop.60}",
 				"$description": "",
 				"$extensions": {
 					"mode": {
-						"light": "{clr-core.ntrl.60}",
-						"dark": "{clr-core.ntrl.40}"
+						"light": "{clr-core.pop.60}",
+						"dark": "{clr-core.pop.30}"
 					},
 					"figma": {
 						"variableId": "VariableID:3172:9430",
@@ -3980,6 +3980,65 @@
 					}
 				}
 			}
+		},
+		"stack-tab": {
+			"active": {
+				"$type": "color",
+				"$value": "{clr.bg.1}",
+				"$description": "",
+				"$extensions": {
+					"mode": {
+						"light": "{clr.bg.1}",
+						"dark": "{clr.bg.1}"
+					},
+					"figma": {
+						"variableId": "VariableID:4766:20135",
+						"collection": {
+							"id": "VariableCollectionId:8:1868",
+							"name": "clr",
+							"defaultModeId": "8:5"
+						}
+					}
+				}
+			},
+			"inactive": {
+				"$type": "color",
+				"$value": "{clr.bg.2}",
+				"$description": "",
+				"$extensions": {
+					"mode": {
+						"light": "{clr.bg.2}",
+						"dark": "{clr.bg.2}"
+					},
+					"figma": {
+						"variableId": "VariableID:4766:20450",
+						"collection": {
+							"id": "VariableCollectionId:8:1868",
+							"name": "clr",
+							"defaultModeId": "8:5"
+						}
+					}
+				}
+			},
+			"inactive-hover": {
+				"$type": "color",
+				"$value": "{clr.scale.ntrl.95}",
+				"$description": "",
+				"$extensions": {
+					"mode": {
+						"light": "{clr.scale.ntrl.95}",
+						"dark": "{clr-core.ntrl.10}"
+					},
+					"figma": {
+						"variableId": "VariableID:4766:20452",
+						"collection": {
+							"id": "VariableCollectionId:8:1868",
+							"name": "clr",
+							"defaultModeId": "8:5"
+						}
+					}
+				}
+			}
 		}
 	},
 	"size": {
@@ -4130,6 +4189,142 @@
 			}
 		}
 	},
+	"text": {
+		"weight": {
+			"regular": {
+				"$type": "string",
+				"$value": "400",
+				"$description": "",
+				"$extensions": {
+					"mode": {},
+					"figma": {
+						"variableId": "VariableID:5260:10128",
+						"collection": {
+							"id": "VariableCollectionId:5260:10127",
+							"name": "text",
+							"defaultModeId": "5260:0"
+						}
+					}
+				}
+			},
+			"semibold": {
+				"$type": "string",
+				"$value": "500",
+				"$description": "",
+				"$extensions": {
+					"mode": {},
+					"figma": {
+						"variableId": "VariableID:5260:10129",
+						"collection": {
+							"id": "VariableCollectionId:5260:10127",
+							"name": "text",
+							"defaultModeId": "5260:0"
+						}
+					}
+				}
+			},
+			"bold": {
+				"$type": "string",
+				"$value": "600",
+				"$description": "",
+				"$extensions": {
+					"mode": {},
+					"figma": {
+						"variableId": "VariableID:5260:10131",
+						"collection": {
+							"id": "VariableCollectionId:5260:10127",
+							"name": "text",
+							"defaultModeId": "5260:0"
+						}
+					}
+				}
+			}
+		},
+		"line-height": {
+			"body": {
+				"$type": "string",
+				"$value": "160%",
+				"$description": "",
+				"$extensions": {
+					"mode": {},
+					"figma": {
+						"variableId": "VariableID:5286:1828",
+						"collection": {
+							"id": "VariableCollectionId:5260:10127",
+							"name": "text",
+							"defaultModeId": "5260:0"
+						}
+					}
+				}
+			},
+			"default": {
+				"$type": "string",
+				"$value": "120%",
+				"$description": "",
+				"$extensions": {
+					"mode": {},
+					"figma": {
+						"variableId": "VariableID:5287:519",
+						"collection": {
+							"id": "VariableCollectionId:5260:10127",
+							"name": "text",
+							"defaultModeId": "5260:0"
+						}
+					}
+				}
+			}
+		},
+		"font-family": {
+			"default": {
+				"$type": "string",
+				"$value": "Inter",
+				"$description": "",
+				"$extensions": {
+					"mode": {},
+					"figma": {
+						"variableId": "VariableID:5286:1830",
+						"collection": {
+							"id": "VariableCollectionId:5260:10127",
+							"name": "text",
+							"defaultModeId": "5260:0"
+						}
+					}
+				}
+			},
+			"mono": {
+				"$type": "string",
+				"$value": "Geist Mono",
+				"$description": "",
+				"$extensions": {
+					"mode": {},
+					"figma": {
+						"variableId": "VariableID:5286:1832",
+						"collection": {
+							"id": "VariableCollectionId:5260:10127",
+							"name": "text",
+							"defaultModeId": "5260:0"
+						}
+					}
+				}
+			},
+			"accent": {
+				"$type": "string",
+				"$value": "PP Editorial New",
+				"$description": "",
+				"$extensions": {
+					"mode": {},
+					"figma": {
+						"variableId": "VariableID:5286:1833",
+						"collection": {
+							"id": "VariableCollectionId:5260:10127",
+							"name": "text",
+							"defaultModeId": "5260:0"
+						}
+					}
+				}
+			}
+		}
+	},
 	"fx": {
 		"shadow": {
 			"s": {
@@ -4177,8 +4372,8 @@
 		"tokens-bruecke-meta": {
 			"useDTCGKeys": true,
 			"colorMode": "hex",
-			"variableCollections": ["clr-core", "clr", "size", "radius"],
-			"createdAt": "2024-10-01T09:40:21.045Z"
+			"variableCollections": ["clr-core", "clr", "size", "radius", "text"],
+			"createdAt": "2024-11-21T15:52:26.375Z"
 		}
 	}
 }

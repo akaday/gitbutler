@@ -1,48 +1,37 @@
 <script lang="ts">
-	import { Project, ProjectService } from '$lib/backend/projects';
+	import { Project, ProjectsService } from '$lib/backend/projects';
 	import SectionCard from '$lib/components/SectionCard.svelte';
 	import Section from '$lib/settings/Section.svelte';
 	import Link from '$lib/shared/Link.svelte';
-	import Spacer from '$lib/shared/Spacer.svelte';
-	import TextArea from '$lib/shared/TextArea.svelte';
-	import TextBox from '$lib/shared/TextBox.svelte';
-	import Toggle from '$lib/shared/Toggle.svelte';
 	import { User } from '$lib/stores/user';
-	import { getContext, getContextStore } from '$lib/utils/context';
 	import * as toasts from '$lib/utils/toasts';
+	import { getContext, getContextStore } from '@gitbutler/shared/context';
+	import Spacer from '@gitbutler/ui/Spacer.svelte';
+	import Textarea from '@gitbutler/ui/Textarea.svelte';
+	import Textbox from '@gitbutler/ui/Textbox.svelte';
+	import Toggle from '@gitbutler/ui/Toggle.svelte';
+	import { onMount } from 'svelte';
 	import { PUBLIC_API_BASE_URL } from '$env/static/public';
 
 	const project = getContext(Project);
 	const user = getContextStore(User);
-	const projectService = getContext(ProjectService);
+	const projectsService = getContext(ProjectsService);
 
-	let title = project?.title;
-	let description = project?.description;
-
-	async function saveProject() {
-		const api =
-			$user && project.api
-				? await projectService.updateCloudProject($user?.access_token, project.api.repository_id, {
-						name: project.title,
-						description: project.description
-					})
-				: undefined;
-		project.api = api ? { ...api, sync: false, sync_code: undefined } : undefined;
-		projectService.updateProject(project);
-	}
+	let title = $state(project?.title);
+	let description = $state(project?.description);
 
 	async function onSyncChange(sync: boolean) {
 		if (!$user) return;
 		try {
 			const cloudProject =
 				project.api ??
-				(await projectService.createCloudProject($user.access_token, {
+				(await projectsService.createCloudProject({
 					name: project.title,
 					description: project.description,
 					uid: project.id
 				}));
 			project.api = { ...cloudProject, sync, sync_code: project.api?.sync_code };
-			projectService.updateProject(project);
+			projectsService.updateProject(project);
 		} catch (error) {
 			console.error(`Failed to update project sync status: ${error}`);
 			toasts.error('Failed to update project sync status');
@@ -54,46 +43,62 @@
 		try {
 			const cloudProject =
 				project.api ??
-				(await projectService.createCloudProject($user.access_token, {
+				(await projectsService.createCloudProject({
 					name: project.title,
 					description: project.description,
 					uid: project.id
 				}));
 			project.api = { ...cloudProject, sync: project.api?.sync || false, sync_code: sync_code };
-			projectService.updateProject(project);
+			projectsService.updateProject(project);
 		} catch (error) {
 			console.error(`Failed to update project sync status: ${error}`);
 			toasts.error('Failed to update project sync status');
 		}
 	}
+
+	// This is some janky bullshit, but it works well enough for now
+	onMount(async () => {
+		if (!project?.api) return;
+		if (!$user) return;
+		const cloudProject = await projectsService.getCloudProject(project.api.repository_id);
+		project.api = { ...cloudProject, sync: project.api.sync, sync_code: project.api.sync_code };
+		projectsService.updateProject(project);
+	});
+
+	$effect(() => {
+		if (description) {
+			console.log('description', description);
+		}
+	});
 </script>
 
 <SectionCard>
 	<form>
 		<fieldset class="fields-wrapper">
-			<TextBox label="Project path" readonly id="path" value={project?.path} />
+			<Textbox label="Project path" readonly id="path" value={project?.path} />
 			<section class="description-wrapper">
-				<TextBox
+				<Textbox
 					label="Project name"
 					id="name"
 					placeholder="Project name can't be empty"
 					bind:value={title}
 					required
-					on:change={(e) => {
-						project.title = e.detail;
-						saveProject();
+					onchange={(value: string) => {
+						project.title = value;
+						projectsService.updateProject(project);
 					}}
 				/>
-				<TextArea
+				<Textarea
 					id="description"
-					rows={3}
+					minRows={3}
+					maxRows={6}
 					placeholder="Project description"
 					bind:value={description}
-					on:change={() => {
-						project.description = description;
-						saveProject();
+					oninput={(e: Event) => {
+						const target = e.currentTarget as HTMLTextAreaElement;
+						project.description = target.value;
+						projectsService.updateProject(project);
 					}}
-					maxHeight={300}
 				/>
 			</section>
 		</fieldset>
@@ -114,7 +119,7 @@
 				<Toggle
 					id="historySync"
 					checked={project.api?.sync || false}
-					on:click={async (e) => await onSyncChange(!!e.detail)}
+					onclick={async () => await onSyncChange(!project.api?.sync)}
 				/>
 			</svelte:fragment>
 		</SectionCard>
@@ -126,7 +131,7 @@
 				<Toggle
 					id="branchesySync"
 					checked={project.api?.sync_code || false}
-					on:click={async (e) => await onSyncCodeChange(!!e.detail)}
+					onclick={async () => await onSyncCodeChange(!project.api?.sync_code)}
 				/>
 			</svelte:fragment>
 		</SectionCard>

@@ -2,25 +2,32 @@
 	import zenSvg from '$lib/assets/dzen-pc.svg?raw';
 	import { Project } from '$lib/backend/projects';
 	import { BaseBranch } from '$lib/baseBranch/baseBranch';
-	import { editor } from '$lib/editorLink/editorLink';
-	import { getGitHost } from '$lib/gitHost/interface/gitHost';
-	import { getContext, getContextStore } from '$lib/utils/context';
-	import { openExternalUrl } from '$lib/utils/url';
+	import { getForge } from '$lib/forge/interface/forge';
+	import { SETTINGS, type Settings } from '$lib/settings/userSettings';
+	import { getEditorUri, openExternalUrl } from '$lib/utils/url';
 	import { BranchController } from '$lib/vbranches/branchController';
+	import { getContext, getContextStore, getContextStoreBySymbol } from '@gitbutler/shared/context';
 	import Icon from '@gitbutler/ui/Icon.svelte';
+	import type { Writable } from 'svelte/store';
 
-	const gitHost = getGitHost();
+	const forge = getForge();
 	const baseBranch = getContextStore(BaseBranch);
 	const branchController = getContext(BranchController);
+	const userSettings = getContextStoreBySymbol<Settings, Writable<Settings>>(SETTINGS);
 
 	const project = getContext(Project);
 
-	async function openInVSCode() {
-		openExternalUrl(`${$editor}://file${project.vscodePath}/?windowId=_blank`);
+	async function openInEditor() {
+		const path = getEditorUri({
+			schemeId: $userSettings.defaultCodeEditor.schemeIdentifer,
+			path: [project.vscodePath],
+			searchParams: { windowId: '_blank' }
+		});
+		openExternalUrl(path);
 	}
 </script>
 
-<div data-tauri-drag-region class="empty-board__wrapper transition-fly">
+<div class="empty-board__wrapper transition-fly">
 	<div class="empty-board">
 		<div class="empty-board__content">
 			<div class="empty-board__about">
@@ -49,6 +56,7 @@
 							<span class="text-12">Create a new branch</span>
 						</div>
 						<button
+							type="button"
 							class="empty-board__suggestions__link"
 							on:click={async () => await openExternalUrl('https://docs.gitbutler.com')}
 						>
@@ -59,14 +67,15 @@
 							<span class="text-12">GitButler Docs</span>
 						</button>
 						<button
+							type="button"
 							class="empty-board__suggestions__link"
-							on:keypress={async () => await openInVSCode()}
-							on:click={async () => await openInVSCode()}
+							on:keypress={async () => await openInEditor()}
+							on:click={async () => await openInEditor()}
 						>
 							<div class="empty-board__suggestions__link__icon">
 								<Icon name="vscode" />
 							</div>
-							<span class="text-12">Open in VSCode</span>
+							<span class="text-12">Open in {$userSettings.defaultCodeEditor.displayName}</span>
 						</button>
 					</div>
 				</div>
@@ -77,7 +86,7 @@
 						{#each ($baseBranch?.recentCommits || []).slice(0, 4) as commit}
 							<a
 								class="empty-board__suggestions__link"
-								href={$gitHost?.commitUrl(commit.id)}
+								href={$forge?.commitUrl(commit.id)}
 								target="_blank"
 								rel="noreferrer"
 								title="Open in browser"
@@ -94,7 +103,7 @@
 			</div>
 		</div>
 
-		<div data-tauri-drag-region class="empty-board__image-frame">
+		<div class="empty-board__image-frame">
 			<div class="empty-board__image">
 				{@html zenSvg}
 			</div>

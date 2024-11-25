@@ -1,22 +1,22 @@
 <script lang="ts">
 	import BranchLabel from './BranchLabel.svelte';
 	import { Project } from '$lib/backend/projects';
-	import { getGitHost } from '$lib/gitHost/interface/gitHost';
+	import { getForge } from '$lib/forge/interface/forge';
 	import { ModeService } from '$lib/modes/service';
-	import { getContext } from '$lib/utils/context';
 	import { error } from '$lib/utils/toasts';
 	import { openExternalUrl } from '$lib/utils/url';
 	import { BranchController } from '$lib/vbranches/branchController';
+	import { getContext } from '@gitbutler/shared/context';
 	import Button from '@gitbutler/ui/Button.svelte';
 	import Icon from '@gitbutler/ui/Icon.svelte';
 	import Modal from '@gitbutler/ui/Modal.svelte';
 	import Tooltip from '@gitbutler/ui/Tooltip.svelte';
-	import type { PullRequest } from '$lib/gitHost/interface/types';
-	import type { Branch } from '$lib/vbranches/types';
+	import type { PullRequest } from '$lib/forge/interface/types';
+	import type { BranchData } from '$lib/vbranches/types';
 	import { goto } from '$app/navigation';
 
-	export let localBranch: Branch | undefined;
-	export let remoteBranch: Branch | undefined;
+	export let localBranch: BranchData | undefined;
+	export let remoteBranch: BranchData | undefined;
 	export let pr: PullRequest | undefined;
 
 	$: branch = remoteBranch || localBranch!;
@@ -24,10 +24,10 @@
 
 	const branchController = getContext(BranchController);
 	const project = getContext(Project);
-	const gitHost = getGitHost();
+	const forge = getForge();
 	const modeSerivce = getContext(ModeService);
 	const mode = modeSerivce.mode;
-	$: gitHostBranch = upstream ? $gitHost?.branch(upstream) : undefined;
+	$: forgeBranch = upstream ? $forge?.branch(upstream) : undefined;
 
 	let isApplying = false;
 	let isDeleting = false;
@@ -37,22 +37,16 @@
 <div class="header__wrapper">
 	<div class="header card">
 		<div class="header__info">
-			<BranchLabel disabled name={branch.name} />
+			<BranchLabel disabled name={branch.givenName} />
 			<div class="header__remote-branch">
 				{#if remoteBranch}
 					<Tooltip text="At least some of your changes have been pushed'">
-						<Button
-							size="tag"
-							icon="remote-branch-small"
-							style="neutral"
-							kind="solid"
-							clickable={false}
-						>
+						<Button size="tag" icon="branch-small" style="neutral" kind="solid" clickable={false}>
 							{localBranch ? 'local and remote' : 'remote'}
 						</Button>
 					</Tooltip>
 
-					{#if gitHostBranch}
+					{#if forgeBranch}
 						<Button
 							size="tag"
 							icon="open-link"
@@ -60,7 +54,7 @@
 							outline
 							shrinkable
 							onclick={(e: MouseEvent) => {
-								const url = gitHostBranch.url;
+								const url = forgeBranch.url;
 								if (url) openExternalUrl(url);
 								e.preventDefault();
 								e.stopPropagation();
@@ -71,7 +65,7 @@
 					{/if}
 				{:else}
 					<div class="status-tag text-11 text-semibold remote">
-						<Icon name="remote-branch-small" /> local
+						<Icon name="branch-small" /> local
 					</div>
 				{/if}
 				{#if pr?.htmlUrl}
@@ -111,7 +105,11 @@
 									remoteBranch?.name
 								);
 							} else {
-								await branchController.createvBranchFromBranch(remoteBranch!.name);
+								await branchController.createvBranchFromBranch(
+									remoteBranch!.name,
+									undefined,
+									pr?.number
+								);
 							}
 							goto(`/${project.id}/board`);
 						} catch (e) {
@@ -143,12 +141,11 @@
 			</div>
 		</div>
 	</div>
-	<div class="header__top-overlay" data-tauri-drag-region></div>
+	<div class="header__top-overlay"></div>
 </div>
 
 <Modal
 	width="small"
-	title="Delete branch"
 	bind:this={deleteBranchModal}
 	onSubmit={async (close) => {
 		try {

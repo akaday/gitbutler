@@ -1,10 +1,8 @@
 <script lang="ts">
 	import FileContextMenu from './FileContextMenu.svelte';
-	import { stackingFeature } from '$lib/config/uiFeatureFlags';
-	import { draggableChips } from '$lib/dragging/draggable';
+	import { draggableChips, type DraggableConfig } from '$lib/dragging/draggable';
 	import { DraggableFile } from '$lib/dragging/draggables';
 	import { itemsSatisfy } from '$lib/utils/array';
-	import { getContext, maybeGetContextStore } from '$lib/utils/context';
 	import { computeFileStatus } from '$lib/utils/fileStatus';
 	import { getLocalCommits, getLocalAndRemoteCommits } from '$lib/vbranches/contexts';
 	import { getCommitStore } from '$lib/vbranches/contexts';
@@ -12,8 +10,8 @@
 	import { SelectedOwnership } from '$lib/vbranches/ownership';
 	import { getLockText } from '$lib/vbranches/tooltip';
 	import { VirtualBranch, type AnyFile, LocalFile } from '$lib/vbranches/types';
+	import { getContext, maybeGetContextStore } from '@gitbutler/shared/context';
 	import FileListItem from '@gitbutler/ui/file/FileListItem.svelte';
-	import { onDestroy } from 'svelte';
 	import type { Writable } from 'svelte/store';
 
 	interface Props {
@@ -30,6 +28,7 @@
 		$props();
 
 	const branch = maybeGetContextStore(VirtualBranch);
+	const branchId = $derived($branch?.id);
 	const selectedOwnership: Writable<SelectedOwnership> | undefined =
 		maybeGetContextStore(SelectedOwnership);
 	const fileIdSelection = getContext(FileIdSelection);
@@ -46,32 +45,21 @@
 	);
 
 	const selectedFiles = fileIdSelection.files;
-
-	// eslint-disable-next-line @typescript-eslint/promise-function-async
-	const draggableFiles = $derived.by(() => {
-		if ($selectedFiles?.some((selectedFile) => selectedFile.id === file.id)) {
-			return $selectedFiles || [];
-		} else {
-			return [file];
-		}
-	});
-
-	let contextMenu: FileContextMenu;
-
-	let draggableEl: HTMLDivElement | undefined = $state();
-	let checked = $state(false);
-	let indeterminate = $state(false);
-
 	const draggable = !readonly && !isUnapplied;
 
-	let animationEndHandler: () => void;
+	let contextMenu = $state<ReturnType<typeof FileContextMenu>>();
+	let draggableEl: HTMLDivElement | undefined = $state();
+	let indeterminate = $state(false);
+	let checked = $state(false);
 
 	function addAnimationEndListener(element: HTMLElement) {
-		animationEndHandler = () => {
-			element.classList.remove('locked-file-animation');
-			element.removeEventListener('animationend', animationEndHandler);
-		};
-		element.addEventListener('animationend', animationEndHandler);
+		element.addEventListener(
+			'animationend',
+			() => {
+				element.classList.remove('locked-file-animation');
+			},
+			{ once: true }
+		);
 	}
 
 	$effect(() => {
@@ -84,22 +72,43 @@
 		}
 	});
 
+	// TODO: Refactor to use this as a Svelte action, e.g. `use:draggableChips()`.
+	let chips:
+		| {
+				update: (opts: DraggableConfig) => void;
+				destroy: () => void;
+		  }
+		| undefined;
+
+	// Manage the lifecycle of the draggable chips.
 	$effect(() => {
 		if (draggableEl) {
-			draggableChips(draggableEl, {
+			const draggableFile = new DraggableFile(branchId || '', file, $commit, selectedFiles);
+			const config = {
 				label: `${file.filename}`,
 				filePath: file.path,
-				data: new DraggableFile($branch?.id || '', file, $commit, draggableFiles),
+				data: draggableFile,
 				disabled: !draggable,
 				viewportId: 'board-viewport',
 				selector: '.selected-draggable'
-			});
+			};
+			if (chips) {
+				chips.update(config);
+			} else {
+				chips = draggableChips(draggableEl, config);
+			}
+		} else {
+			chips?.destroy();
 		}
+
+		return () => {
+			chips?.destroy();
+		};
 	});
 
 	async function handleDragStart() {
 		// Add animation end listener to files
-		draggableFiles.forEach((f) => {
+		$selectedFiles.forEach((f) => {
 			if (f.locked) {
 				const lockedElement = document.getElementById(`file-${f.id}`);
 				if (lockedElement) {
@@ -109,25 +118,14 @@
 			}
 		});
 	}
-
-	onDestroy(() => {
-		if (draggableEl && animationEndHandler) {
-			draggableEl.removeEventListener('animationend', animationEndHandler);
-		}
-		draggableFiles.forEach((f) => {
-			const lockedElement = document.getElementById(`file-${f.id}`);
-			if (lockedElement && animationEndHandler) {
-				lockedElement.removeEventListener('animationend', animationEndHandler);
-			}
-		});
-	});
 </script>
 
 <FileContextMenu
 	bind:this={contextMenu}
-	target={draggableEl}
+	trigger={draggableEl}
 	{isUnapplied}
 	branchId={$branch?.id}
+	isBinary={file.binary}
 />
 
 <FileListItem
@@ -135,7 +133,6 @@
 	bind:ref={draggableEl}
 	filePath={file.path}
 	fileStatus={computeFileStatus(file)}
-	stacking={$stackingFeature}
 	{selected}
 	{showCheckbox}
 	{checked}
@@ -157,16 +154,16 @@
 			return ownership;
 		});
 
-		if (draggableFiles.length > 0 && draggableFiles.includes(file)) {
+		if ($selectedFiles.length > 0 && $selectedFiles.includes(file)) {
 			if (isChecked) {
-				draggableFiles.forEach((f) => {
+				$selectedFiles.forEach((f) => {
 					selectedOwnership?.update((ownership) => {
 						f.hunks.forEach((h) => ownership.select(f.id, h));
 						return ownership;
 					});
 				});
 			} else {
-				draggableFiles.forEach((f) => {
+				$selectedFiles.forEach((f) => {
 					selectedOwnership?.update((ownership) => {
 						f.hunks.forEach((h) => ownership.ignore(f.id, h.id));
 						return ownership;
@@ -178,9 +175,9 @@
 	ondragstart={handleDragStart}
 	oncontextmenu={(e) => {
 		if (fileIdSelection.has(file.id, $commit?.id)) {
-			contextMenu.open(e, { files: draggableFiles });
+			contextMenu?.open(e, { files: $selectedFiles });
 		} else {
-			contextMenu.open(e, { files: [file] });
+			contextMenu?.open(e, { files: [file] });
 		}
 	}}
 />

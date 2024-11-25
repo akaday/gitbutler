@@ -1,7 +1,9 @@
 use std::{io::Write, path::Path, time::Duration};
 
-use gitbutler_branch::{BranchCreateRequest, VirtualBranchesHandle};
+use gitbutler_branch::BranchCreateRequest;
+use gitbutler_branch_actions::list_commit_files;
 use gitbutler_oplog::OplogExt;
+use gitbutler_stack::VirtualBranchesHandle;
 use itertools::Itertools;
 
 use super::*;
@@ -155,8 +157,8 @@ fn basic_oplog() -> anyhow::Result<()> {
     assert_eq!(branches.0.len(), 2);
 
     assert_eq!(branch.commits.len(), 3);
-    assert_eq!(branch.commits[0].files.len(), 1);
-    assert_eq!(branch.commits[1].files.len(), 3);
+    assert_eq!(list_commit_files(project, branch.commits[0].id)?.len(), 1);
+    assert_eq!(list_commit_files(project, branch.commits[1].id)?.len(), 3);
 
     let snapshots = project.list_snapshots(10, None)?;
 
@@ -247,7 +249,7 @@ fn restores_gitbutler_workspace() -> anyhow::Result<()> {
 
     assert_eq!(
         VirtualBranchesHandle::new(project.gb_dir())
-            .list_branches_in_workspace()?
+            .list_stacks_in_workspace()?
             .len(),
         0
     );
@@ -255,7 +257,7 @@ fn restores_gitbutler_workspace() -> anyhow::Result<()> {
         gitbutler_branch_actions::create_virtual_branch(project, &BranchCreateRequest::default())?;
     assert_eq!(
         VirtualBranchesHandle::new(project.gb_dir())
-            .list_branches_in_workspace()?
+            .list_stacks_in_workspace()?
             .len(),
         1
     );
@@ -306,9 +308,9 @@ fn restores_gitbutler_workspace() -> anyhow::Result<()> {
         "head now points to the first commit, it's not commit 2 anymore"
     );
 
-    let vbranches = VirtualBranchesHandle::new(project.gb_dir()).list_branches_in_workspace()?;
+    let stacks = VirtualBranchesHandle::new(project.gb_dir()).list_stacks_in_workspace()?;
     assert_eq!(
-        vbranches.len(),
+        stacks.len(),
         1,
         "vbranches aren't affected by this (only the head commit)"
     );

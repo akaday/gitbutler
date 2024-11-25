@@ -1,15 +1,15 @@
 pub mod commands {
+    use crate::error::{Error, UnmarkedError};
     use anyhow::Result;
+    use git2::Oid;
     use gitbutler_branch_actions::RemoteBranchFile;
     use gitbutler_project as projects;
     use gitbutler_project::ProjectId;
-    use gitbutler_repo::RepoCommands;
+    use gitbutler_repo::{FileInfo, RepoCommands};
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
     use tauri::State;
     use tracing::instrument;
-
-    use crate::error::{Error, UnmarkedError};
 
     #[tauri::command(async)]
     #[instrument(skip(projects), err(Debug))]
@@ -70,13 +70,17 @@ pub mod commands {
 
     #[tauri::command(async)]
     #[instrument(skip(projects))]
-    pub fn get_pr_template_contents(
+    pub fn get_blob_info(
         projects: State<'_, projects::Controller>,
         project_id: ProjectId,
         relative_path: &Path,
-    ) -> Result<String, Error> {
+        commit_id: Option<String>,
+    ) -> Result<FileInfo, Error> {
         let project = projects.get(project_id)?;
+        let commit_oid = commit_id
+            .map(|id| Oid::from_str(&id).map_err(|e| anyhow::anyhow!(e)))
+            .transpose()?;
 
-        Ok(project.read_file_from_workspace(relative_path)?)
+        Ok(project.read_file_from_workspace(commit_oid, relative_path)?)
     }
 }

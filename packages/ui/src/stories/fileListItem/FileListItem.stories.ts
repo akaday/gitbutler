@@ -2,15 +2,15 @@ import DemoFileListItem from './DemoFileListItem.svelte';
 import type { Meta, StoryObj } from '@storybook/svelte';
 
 const meta = {
-	title: 'Files / FileListItem',
-	component: DemoFileListItem
-} satisfies Meta<DemoFileListItem>;
+	title: 'List items / FileListItem',
+	component: DemoFileListItem as any
+} satisfies Meta<typeof DemoFileListItem>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const FileListItemStory: Story = {
-	name: 'FileListItem',
+	name: 'Default',
 	args: {
 		filePath: '/path/to/file.svelte',
 		fileStatus: 'A',
@@ -27,6 +27,25 @@ export const FileListItemStory: Story = {
 		},
 		oncheck: (e: Event) => {
 			console.log('checked', e);
+		}
+	}
+};
+
+export const OnResolveStory: Story = {
+	name: 'Resolve button',
+	args: {
+		filePath: '/path/to/file.svelte',
+		fileStatus: 'A',
+		fileStatusStyle: 'dot',
+		clickable: false,
+		selected: false,
+		conflicted: true,
+		checked: true,
+		onclick: () => {
+			console.log('clicked');
+		},
+		onresolveclick: () => {
+			console.log('resolve clicked');
 		}
 	}
 };

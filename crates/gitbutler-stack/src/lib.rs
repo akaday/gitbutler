@@ -1,5 +1,19 @@
-mod heads;
-mod series;
+#![warn(clippy::indexing_slicing)]
+mod file_ownership;
+mod ownership;
 mod stack;
-pub use series::Series;
-pub use stack::{commit_by_oid_or_change_id, PatchReferenceUpdate, Stack, TargetUpdate};
+pub mod stack_context;
+mod state;
+mod target;
+
+pub use file_ownership::OwnershipClaim;
+pub use ownership::{reconcile_claims, BranchOwnershipClaims, ClaimOutcome};
+pub use stack::{Stack, StackId};
+pub use state::{VirtualBranches as VirtualBranchesState, VirtualBranchesHandle};
+pub use target::Target;
+
+mod heads;
+pub use stack::{commit_by_oid_or_change_id, CommitsForId, PatchReferenceUpdate, TargetUpdate};
+
+mod stack_branch;
+pub use stack_branch::{CommitOrChangeId, StackBranch};

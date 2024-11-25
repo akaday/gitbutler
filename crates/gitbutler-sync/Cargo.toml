@@ -6,7 +6,7 @@ authors = ["GitButler <gitbutler@gitbutler.com>"]
 publish = false
 
 [dependencies]
-anyhow = "1.0.86"
+anyhow = "1.0.92"
 tracing.workspace = true
 itertools = "0.13"
 git2.workspace = true
@@ -19,3 +19,4 @@ gitbutler-reference.workspace = true
 gitbutler-error.workspace = true
 gitbutler-id.workspace = true
 gitbutler-url.workspace = true
+gitbutler-stack.workspace = true

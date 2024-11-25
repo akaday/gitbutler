@@ -9,23 +9,28 @@
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync",
 		"check": "svelte-check --tsconfig ./tsconfig.json",
-		"check:watch": "svelte-check --tsconfig ./tsconfig.json --watch"
+		"check:watch": "svelte-check --tsconfig ./tsconfig.json --watch",
+		"test:e2e:web": "playwright test"
 	},
 	"devDependencies": {
 		"@fontsource/fira-mono": "^4.5.10",
+		"@gitbutler/shared": "workspace:*",
 		"@gitbutler/ui": "workspace:*",
 		"@neoconfetti/svelte": "^1.0.0",
+		"@playwright/test": "1.47.0",
 		"@sveltejs/adapter-auto": "^3.0.0",
 		"@sveltejs/kit": "catalog:svelte",
 		"@sveltejs/vite-plugin-svelte": "catalog:svelte",
+		"@types/node": "^22.3.0",
 		"svelte": "catalog:svelte",
 		"svelte-check": "catalog:svelte",
-		"vite": "catalog:"
+		"vite": "catalog:",
+		"@reduxjs/toolkit": "catalog:redux"
 	},
 	"dependencies": {
 		"@sentry/sveltekit": "^8.9.2",
+		"dayjs": "^1.11.13",
 		"highlight.js": "^11.10.0",
-		"marked": "^10.0.0",
-		"moment": "^2.30.1"
+		"marked": "^10.0.0"
 	}
 }

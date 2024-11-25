@@ -7,16 +7,17 @@
 	// import components
 	import { DraggableFile, DraggableHunk } from '$lib/dragging/draggables';
 	import Dropzone from '$lib/dropzone/Dropzone.svelte';
-	import { getContext } from '$lib/utils/context';
 	import { BranchController } from '$lib/vbranches/branchController';
 	import { filesToOwnership } from '$lib/vbranches/ownership';
+	import { getContext } from '@gitbutler/shared/context';
 	import Button from '@gitbutler/ui/Button.svelte';
 
 	const branchController = getContext(BranchController);
 
 	function accepts(data: any) {
-		if (data instanceof DraggableFile) return !data.files.some((f) => f.locked);
-		if (data instanceof DraggableHunk) return !data.hunk.locked;
+		if (data instanceof DraggableFile)
+			return !(data.isCommitted || data.files.some((f) => f.locked));
+		if (data instanceof DraggableHunk) return !(data.isCommitted || data.hunk.locked);
 		return false;
 	}
 
@@ -31,10 +32,10 @@
 	}
 </script>
 
-<div class="canvas-dropzone" data-tauri-drag-region>
+<div class="canvas-dropzone">
 	<Dropzone {accepts} ondrop={onDrop}>
 		{#snippet overlay({ hovered, activated })}
-			<div class="new-virtual-branch" class:activated class:hovered data-tauri-drag-region>
+			<div class="new-virtual-branch" class:activated class:hovered>
 				<div class="new-virtual-branch__content">
 					<div class="stimg">
 						<div class="stimg__hand">

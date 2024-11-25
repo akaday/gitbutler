@@ -1,8 +1,12 @@
 use std::fs;
 
+use crate::init_opts;
+use gitbutler_commit::commit_headers::CommitHeadersV2;
 use gitbutler_oxidize::git2_to_gix_object_id;
+use gitbutler_repo::RepositoryExt;
 use gix_testtools::bstr::ByteSlice as _;
 use tempfile::{tempdir, TempDir};
+use uuid::Uuid;
 
 pub struct TestingRepository {
     pub repository: git2::Repository,
@@ -12,7 +16,23 @@ pub struct TestingRepository {
 impl TestingRepository {
     pub fn open() -> Self {
         let tempdir = tempdir().unwrap();
-        let repository = git2::Repository::init(tempdir.path()).unwrap();
+        let repository = git2::Repository::init_opts(tempdir.path(), &init_opts()).unwrap();
+        // TODO(ST): remove this once `gix::Repository::index_or_load_from_tree_or_empty()`
+        //           is available and used to get merge/diff resource caches. Also: name this
+        //          `open_unborn()` to make it clear.
+        // For now we need a resemblance of an initialized repo.
+        let signature = git2::Signature::now("Caleb", "caleb@gitbutler.com").unwrap();
+        let empty_tree_id = repository.treebuilder(None).unwrap().write().unwrap();
+        repository
+            .commit(
+                Some("refs/heads/master"),
+                &signature,
+                &signature,
+                "init to prevent load index failure",
+                &repository.find_tree(empty_tree_id).unwrap(),
+                &[],
+            )
+            .unwrap();
 
         let config = repository.config().unwrap();
         match config.open_level(git2::ConfigLevel::Local) {
@@ -32,10 +52,67 @@ impl TestingRepository {
         }
     }
 
+    pub fn open_with_initial_commit(files: &[(&str, &str)]) -> Self {
+        let tempdir = tempdir().unwrap();
+        let repository = git2::Repository::init_opts(tempdir.path(), &init_opts()).unwrap();
+
+        let config = repository.config().unwrap();
+        match config.open_level(git2::ConfigLevel::Local) {
+            Ok(mut local) => {
+                local.set_str("commit.gpgsign", "false").unwrap();
+                local.set_str("user.name", "gitbutler-test").unwrap();
+                local
+                    .set_str("user.email", "gitbutler-test@example.com")
+                    .unwrap();
+            }
+            Err(err) => panic!("{}", err),
+        }
+
+        let repository = Self {
+            tempdir,
+            repository,
+        };
+        {
+            let commit = repository.commit_tree(None, files);
+            repository
+                .repository
+                .branch("master", &commit, true)
+                .unwrap();
+        }
+        repository
+    }
+
+    pub fn commit_tree_with_change_id<'a>(
+        &'a self,
+        parent: Option<&git2::Commit<'_>>,
+        change_id: &str,
+        files: &[(&str, &str)],
+    ) -> git2::Commit<'a> {
+        self.commit_tree_inner(parent, &Uuid::new_v4().to_string(), files, Some(change_id))
+    }
     pub fn commit_tree<'a>(
         &'a self,
-        parent: Option<&git2::Commit<'a>>,
+        parent: Option<&git2::Commit<'_>>,
         files: &[(&str, &str)],
+    ) -> git2::Commit<'a> {
+        self.commit_tree_inner(parent, &Uuid::new_v4().to_string(), files, None)
+    }
+
+    pub fn commit_tree_with_message<'a>(
+        &'a self,
+        parent: Option<&git2::Commit<'_>>,
+        message: &str,
+        files: &[(&str, &str)],
+    ) -> git2::Commit<'a> {
+        self.commit_tree_inner(parent, message, files, None)
+    }
+
+    pub fn commit_tree_inner<'a>(
+        &'a self,
+        parent: Option<&git2::Commit<'_>>,
+        message: &str,
+        files: &[(&str, &str)],
+        change_id: Option<&str>,
     ) -> git2::Commit<'a> {
         // Remove everything other than the .git folder
         for entry in fs::read_dir(self.tempdir.path()).unwrap() {
@@ -70,18 +147,25 @@ impl TestingRepository {
             .unwrap();
 
         let signature = git2::Signature::now("Caleb", "caleb@gitbutler.com").unwrap();
+        let commit_headers =
+            change_id.map_or(CommitHeadersV2::new(), |change_id| CommitHeadersV2 {
+                change_id: change_id.to_string(),
+                conflicted: None,
+            });
+
         let commit = self
             .repository
-            .commit(
+            .commit_with_signature(
                 None,
                 &signature,
                 &signature,
-                "Committee",
+                message,
                 &self
                     .repository
                     .find_tree(index.write_tree().unwrap())
                     .unwrap(),
                 parent.map(|c| vec![c]).unwrap_or_default().as_slice(),
+                Some(commit_headers),
             )
             .unwrap();
 
